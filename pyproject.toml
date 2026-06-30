@@ -1,0 +1,45 @@
+[project]
+name = "nova-agent-backend"
+version = "0.1.0"
+description = "Production-ready agentic backend (LangGraph + LangChain + Pydantic + Pinecone)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.32.0",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.5.0",
+    "langchain>=0.3.7",
+    "langchain-core>=0.3.15",
+    "langchain-openai>=0.2.5",
+    "langchain-pinecone>=0.2.0",
+    "langgraph>=0.2.45",
+    "pinecone>=5.3.0",
+    "tenacity>=9.0.0",
+    "structlog>=24.4.0",
+    "httpx>=0.27.0",
+    "orjson>=3.10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "ruff>=0.7.0",
+    "mypy>=1.13.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "ASYNC"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true
