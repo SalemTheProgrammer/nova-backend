@@ -15,11 +15,40 @@ from app.models import (
     Fournisseur,
     LigneProduction,
     LotMatierePremiere,
+    Machine,
     MatierePremiere,
     Nomenclature,
     NomenclatureLigne,
 )
-from app.models.enums import StatutLot, TypeArticle, Unite
+from app.models.enums import StatutLot, StatutMachine, TypeArticle, Unite
+
+
+def _seed_machines_si_absentes(db) -> None:
+    """Ajoute les machines démo même si le reste du seed a déjà tourné (idempotent)."""
+    existing = db.query(Article).filter_by(code="PARA500").first()
+    if existing is None:
+        return
+    if existing.temps_cycle_cible_s is None:
+        existing.temps_cycle_cible_s = Decimal("4.0")
+    ligne = db.query(LigneProduction).filter_by(code="LIGNE-COMP-01").first()
+    if ligne is None or db.query(Machine).filter_by(code="M-01").first():
+        return
+    db.add_all(
+        [
+            Machine(
+                code="M-01", nom="Comprimeuse rotative 1",
+                ligne_production_id=ligne.id, statut=StatutMachine.ARRET,
+                temps_cycle_cible_s=existing.temps_cycle_cible_s,
+            ),
+            Machine(
+                code="M-02", nom="Blistrière 1",
+                ligne_production_id=ligne.id, statut=StatutMachine.ARRET,
+                temps_cycle_cible_s=existing.temps_cycle_cible_s,
+            ),
+        ]
+    )
+    db.commit()
+    print("Machines démo ajoutées : M-01, M-02.")
 
 
 def seed() -> None:
@@ -28,6 +57,7 @@ def seed() -> None:
     try:
         if db.query(Article).filter_by(code="PARA500").first():
             print("Seed déjà présent — rien à faire.")
+            _seed_machines_si_absentes(db)
             return
 
         fournisseur = Fournisseur(
@@ -115,6 +145,7 @@ def seed() -> None:
             code="PARA500",
             designation="Paracétamol 500 mg - Comprimés (boîte de 16)",
             unite=Unite.UN, type=TypeArticle.PF, actif=True,
+            temps_cycle_cible_s=Decimal("4.0"),
         )
         db.add(article)
         db.flush()
@@ -140,8 +171,26 @@ def seed() -> None:
                 )
             )
 
+        # --- Machines (simulateur SCADA) ---
+        machines = [
+            Machine(
+                code="M-01", nom="Comprimeuse rotative 1",
+                ligne_production_id=ligne.id, statut=StatutMachine.ARRET,
+                temps_cycle_cible_s=article.temps_cycle_cible_s,
+            ),
+            Machine(
+                code="M-02", nom="Blistrière 1",
+                ligne_production_id=ligne.id, statut=StatutMachine.ARRET,
+                temps_cycle_cible_s=article.temps_cycle_cible_s,
+            ),
+        ]
+        db.add_all(machines)
+
         db.commit()
-        print("Seed créé : article PARA500 + 5 MP (6 lots) + 1 ligne + formule.")
+        print(
+            "Seed créé : article PARA500 + 5 MP (6 lots) + 1 ligne + formule + 2 machines "
+            "(M-01, M-02)."
+        )
     finally:
         db.close()
 

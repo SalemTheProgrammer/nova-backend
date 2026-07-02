@@ -24,6 +24,8 @@ class Article(Base, TimestampMixin):
         SAEnum(TypeArticle), default=TypeArticle.PF, nullable=False
     )
     actif: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Temps de cycle standard (secondes/unité), utilisé pour le calcul du TRS (TN, TP).
+    temps_cycle_cible_s: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
 
     nomenclatures: Mapped[list["Nomenclature"]] = relationship(
         back_populates="article", cascade="all, delete-orphan"
@@ -67,6 +69,11 @@ class LigneProduction(Base, TimestampMixin):
     code: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
     designation: Mapped[str] = mapped_column(String(255), nullable=False)
     actif: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Multiplicateurs simples pour TRG/TRE (AFNOR NF E60-182), pas de calendrier d'équipes v1.
+    taux_charge: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=Decimal("1.0"), nullable=False)
+    taux_engagement: Mapped[Decimal] = mapped_column(
+        Numeric(5, 4), default=Decimal("1.0"), nullable=False
+    )
 
 
 class Nomenclature(Base, TimestampMixin):

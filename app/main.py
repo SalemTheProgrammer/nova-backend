@@ -83,6 +83,11 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.api_prefix)
+
+    from app.websockets.dashboard_ws import register_websocket_routes
+
+    register_websocket_routes(app)
+
     return app
 
 

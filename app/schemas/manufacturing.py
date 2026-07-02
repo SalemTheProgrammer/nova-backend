@@ -211,6 +211,10 @@ class OFRead(BaseModel):
     date_fin_prevue: date | None
     ligne_production_id: int | None
     date_creation: datetime
+    date_debut_reelle: datetime | None = None
+    date_fin_reelle: datetime | None = None
+    quantite_bonne: Decimal = Decimal("0")
+    quantite_rejetee: Decimal = Decimal("0")
     consommations: list[OFConsommationRead] = []
 
 

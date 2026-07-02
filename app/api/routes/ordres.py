@@ -50,6 +50,10 @@ def _of_read(of: OrdreFabrication) -> OFRead:
         date_fin_prevue=of.date_fin_prevue,
         ligne_production_id=of.ligne_production_id,
         date_creation=of.date_creation,
+        date_debut_reelle=of.date_debut_reelle,
+        date_fin_reelle=of.date_fin_reelle,
+        quantite_bonne=of.quantite_bonne,
+        quantite_rejetee=of.quantite_rejetee,
         consommations=consommations,
     )
 

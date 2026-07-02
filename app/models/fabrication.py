@@ -44,8 +44,14 @@ class OrdreFabrication(Base, TimestampMixin):
     numero_lot_produit: Mapped[str | None] = mapped_column(String(100), nullable=True)
     date_debut_prevue: Mapped[date | None] = mapped_column(Date, nullable=True)
     date_fin_prevue: Mapped[date | None] = mapped_column(Date, nullable=True)
+    date_debut_reelle: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     date_fin_reelle: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cree_par: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    # Suivi d'exécution (mis à jour par le simulateur machine, pas la planification).
+    quantite_bonne: Mapped[Decimal] = mapped_column(Numeric(18, 4), default=Decimal("0"), nullable=False)
+    quantite_rejetee: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), default=Decimal("0"), nullable=False
+    )
 
     article: Mapped[Article] = relationship()
     nomenclature: Mapped[Nomenclature] = relationship()
