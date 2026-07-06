@@ -192,3 +192,54 @@ async def envoyer_tag(
         machine,
         lambda: simulator_service.envoyer_tag(db, machine, tag=payload.tag, valeur=payload.valeur),
     )
+
+
+# --------------------------------------------------------------------------- #
+# Mode auto (la ligne vit toute seule) + scénarios de démonstration
+# --------------------------------------------------------------------------- #
+
+
+@router.get("/auto")
+async def statut_auto() -> dict:
+    from app.services.auto_simulator import auto_simulator
+
+    return {"actif": auto_simulator.actif}
+
+
+@router.post("/auto/start")
+async def demarrer_auto() -> dict:
+    from app.services.auto_simulator import auto_simulator
+
+    auto_simulator.demarrer()
+    return {"actif": True}
+
+
+@router.post("/auto/stop")
+async def arreter_auto() -> dict:
+    from app.services.auto_simulator import auto_simulator
+
+    auto_simulator.arreter()
+    return {"actif": False}
+
+
+@router.post("/scenarios/{nom}")
+async def declencher_scenario(nom: str, db: Session = Depends(get_db)) -> dict:
+    """Injecte un incident réaliste ; le superviseur Nova réagit comme en production."""
+    from app.services import auto_simulator as sim
+
+    scenarios = {
+        "panne-critique": sim.scenario_panne_critique,
+        "derive-qualite": sim.scenario_derive_qualite,
+        "rupture-stock": sim.scenario_rupture_stock,
+    }
+    scenario = scenarios.get(nom)
+    if scenario is None:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            f"Scénario inconnu : {nom}. Choix : {', '.join(scenarios)}",
+        )
+    try:
+        message = scenario(db)
+    except AppError as exc:
+        raise HTTPException(exc.status_code, exc.message)
+    return {"scenario": nom, "message": message}

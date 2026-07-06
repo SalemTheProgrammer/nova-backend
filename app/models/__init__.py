@@ -12,6 +12,7 @@ from app.models.enums import (
     StatutLot,
     StatutMachine,
     StatutOF,
+    StatutProposition,
     TypeArticle,
     TypeEvenementMachine,
     TypeEvenementQualite,
@@ -19,21 +20,24 @@ from app.models.enums import (
     TypeMouvement,
     Unite,
 )
+from app.models.agent_proposal import AgentProposal
 from app.models.alert import Alert
 from app.models.downtime_event import DowntimeEvent
 from app.models.fabrication import OFConsommationMP, OrdreFabrication
 from app.models.machine import Machine
 from app.models.machine_event import MachineEvent
 from app.models.maintenance_event import MaintenanceEvent
-from app.models.normes import Norme
+from app.models.documents import DocumentRag
 from app.models.quality_event import QualityEvent
 from app.models.referentiel import (
     Article,
     Fournisseur,
+    LigneLien,
     LigneProduction,
     MatierePremiere,
     Nomenclature,
     NomenclatureLigne,
+    ligne_article,
 )
 from app.models.stock import LotMatierePremiere, MouvementStock
 
@@ -58,14 +62,16 @@ __all__ = [
     "LigneProduction",
     "Nomenclature",
     "NomenclatureLigne",
+    "LigneLien",
+    "ligne_article",
     # stock
     "LotMatierePremiere",
     "MouvementStock",
     # fabrication
     "OrdreFabrication",
     "OFConsommationMP",
-    # normes
-    "Norme",
+    # base documentaire (RAG)
+    "DocumentRag",
     # MES / SCADA
     "Machine",
     "MachineEvent",
@@ -73,4 +79,7 @@ __all__ = [
     "QualityEvent",
     "MaintenanceEvent",
     "Alert",
+    # superviseur autonome
+    "StatutProposition",
+    "AgentProposal",
 ]

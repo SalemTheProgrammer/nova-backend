@@ -59,8 +59,8 @@ def rechercher_article(query: str) -> str:
         )
 
 
-@tool
-def verifier_disponibilite(article_id: int, quantite: float) -> str:
+@tool(response_format="content_and_artifact")
+def verifier_disponibilite(article_id: int, quantite: float) -> tuple[str, dict | None]:
     """Calcule les besoins en matières premières pour produire `quantite` unités d'un article,
     compare au stock disponible et indique si la fabrication est possible.
 
@@ -70,12 +70,12 @@ def verifier_disponibilite(article_id: int, quantite: float) -> str:
     try:
         qte = Decimal(str(quantite))
     except (InvalidOperation, ValueError):
-        return f"Quantité invalide : {quantite!r}."
+        return f"Quantité invalide : {quantite!r}.", None
     with session_scope() as db:
         try:
             f = svc.verifier_faisabilite(db, article_id, qte)
         except AppError as exc:
-            return f"Erreur : {exc.message}"
+            return f"Erreur : {exc.message}", None
         lignes = [
             f"  - {b.code} ({b.designation}) : requis {b.quantite_requise} {b.unite}, "
             f"dispo {b.quantite_disponible} {b.unite}"
@@ -88,7 +88,25 @@ def verifier_disponibilite(article_id: int, quantite: float) -> str:
             if f.faisable
             else "❌ Fabrication IMPOSSIBLE : stock insuffisant (voir ⚠ ci-dessus)."
         )
-        return "\n".join([entete, *lignes, "", verdict])
+        artifact = {
+            "kind": "faisabilite",
+            "article_id": article_id,
+            "quantite": str(qte),
+            "faisable": f.faisable,
+            "besoins": [
+                {
+                    "code": b.code,
+                    "designation": b.designation,
+                    "unite": str(b.unite),
+                    "requis": str(b.quantite_requise),
+                    "disponible": str(b.quantite_disponible),
+                    "manquant": str(b.manquant),
+                    "suffisant": b.suffisant,
+                }
+                for b in f.besoins
+            ],
+        }
+        return "\n".join([entete, *lignes, "", verdict]), artifact
 
 
 @tool
@@ -129,14 +147,14 @@ def etat_stock_matiere(query: str = "") -> str:
         return "\n".join(lignes)
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def creer_ordre_fabrication(
     article_id: int,
     quantite: float,
     confirmation: bool,
     date_fin_prevue: str | None = None,
     ligne_production_id: int | None = None,
-) -> str:
+) -> tuple[str, dict | None]:
     """Crée un ordre de fabrication : décrémente les matières premières en FEFO,
     enregistre la généalogie du lot, et planifie l'OF.
 
@@ -151,11 +169,11 @@ def creer_ordre_fabrication(
         return (
             "Confirmation requise : présentez d'abord les besoins/disponibilités et "
             "demandez à l'opérateur de confirmer avant de créer l'OF (confirmation=true)."
-        )
+        ), None
     try:
         d_fin = _parse_date(date_fin_prevue)
     except AppError as exc:
-        return f"Erreur : {exc.message}"
+        return f"Erreur : {exc.message}", None
 
     with session_scope() as db:
         try:
@@ -175,9 +193,28 @@ def creer_ordre_fabrication(
                 f" ← lot {c.lot.numero_lot} : {c.quantite_consommee}"
                 for c in of.consommations
             ]
+            artifact = {
+                "kind": "of_cree",
+                "of_id": of.id,
+                "numero": numero,
+                "lot_produit": lot,
+                "statut": "PLANIFIE",
+                "date_fin_prevue": date_fin_prevue,
+                "ligne_production_id": ligne_production_id,
+                "consommations": [
+                    {
+                        "code_mp": c.matiere_premiere.code
+                        if c.matiere_premiere
+                        else str(c.matiere_premiere_id),
+                        "numero_lot": c.lot.numero_lot,
+                        "quantite": str(c.quantite_consommee),
+                    }
+                    for c in of.consommations
+                ],
+            }
         except AppError as exc:
             detail = f" Détails : {exc.details}" if exc.details else ""
-            return f"❌ Impossible de créer l'OF : {exc.message}{detail}"
+            return f"❌ Impossible de créer l'OF : {exc.message}{detail}", None
 
         lignes = [
             f"✅ Ordre de fabrication créé : {numero}",
@@ -188,7 +225,7 @@ def creer_ordre_fabrication(
             "   Matières premières consommées (FEFO) :",
             *conso,
         ]
-        return "\n".join(lignes)
+        return "\n".join(lignes), artifact
 
 
 @tool

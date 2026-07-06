@@ -25,3 +25,6 @@ htmlcov/
 
 .DS_Store
 *.log
+
+# Donnees d'execution (documents uploades)
+data/

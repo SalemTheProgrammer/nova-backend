@@ -3,12 +3,33 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    ForeignKey,
+    Integer,
+    Numeric,
+    String,
+    Table,
+    UniqueConstraint,
+)
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin
 from app.models.enums import TypeArticle, Unite
+
+# Association ligne <-> articles : quels articles (produits) une ligne sait produire.
+ligne_article = Table(
+    "ligne_article",
+    Base.metadata,
+    Column(
+        "ligne_production_id",
+        ForeignKey("ligne_production.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("article_id", ForeignKey("article.id", ondelete="CASCADE"), primary_key=True),
+)
 
 
 class Article(Base, TimestampMixin):
@@ -73,6 +94,30 @@ class LigneProduction(Base, TimestampMixin):
     taux_charge: Mapped[Decimal] = mapped_column(Numeric(5, 4), default=Decimal("1.0"), nullable=False)
     taux_engagement: Mapped[Decimal] = mapped_column(
         Numeric(5, 4), default=Decimal("1.0"), nullable=False
+    )
+
+    # Articles que cette ligne sait produire.
+    articles: Mapped[list["Article"]] = relationship(secondary=ligne_article)
+
+
+class LigneLien(Base, TimestampMixin):
+    """Lien de flux entre deux lignes : la sortie de `source` alimente `target`.
+
+    Modélise l'atelier comme un graphe (façon n8n) : une ligne peut être l'entrée
+    d'une autre (produit semi-fini -> ligne suivante).
+    """
+
+    __tablename__ = "ligne_lien"
+    __table_args__ = (
+        UniqueConstraint("source_id", "target_id", name="uq_ligne_lien_source_target"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(
+        ForeignKey("ligne_production.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    target_id: Mapped[int] = mapped_column(
+        ForeignKey("ligne_production.id", ondelete="CASCADE"), index=True, nullable=False
     )
 
 

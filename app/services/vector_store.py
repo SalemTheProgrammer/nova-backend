@@ -15,8 +15,8 @@ from app.services.llm import get_embeddings
 
 logger = get_logger(__name__)
 
-# Namespace isolating regulatory norm documents from the general knowledge base.
-NORMES_NAMESPACE = "normes"
+# Namespace de la base documentaire (normes, procédures, manuels…).
+DOCUMENTS_NAMESPACE = "documents"
 
 
 @lru_cache
@@ -54,57 +54,37 @@ def get_vector_store() -> PineconeVectorStore:
     )
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-def similarity_search(query: str, *, top_k: int | None = None) -> list[Document]:
-    settings = get_settings()
-    k = top_k or settings.retrieval_top_k
-    try:
-        return get_vector_store().similarity_search(query, k=k)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("similarity_search_failed", error=str(exc))
-        raise VectorStoreError("Vector store query failed") from exc
-
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-def add_documents(documents: list[Document]) -> list[str]:
-    try:
-        return get_vector_store().add_documents(documents)
-    except Exception as exc:  # noqa: BLE001
-        logger.error("add_documents_failed", error=str(exc))
-        raise VectorStoreError("Failed to write documents to vector store") from exc
-
-
 # --------------------------------------------------------------------------- #
-# Normes (regulatory documents) — isolated namespace with page-level citations
+# Base documentaire — namespace dédié avec citations page par page
 # --------------------------------------------------------------------------- #
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-def add_norme_documents(documents: list[Document]) -> list[str]:
-    """Index norm-document chunks in the dedicated 'normes' namespace."""
+def add_document_chunks(documents: list[Document]) -> list[str]:
+    """Index document chunks in the dedicated 'documents' namespace."""
     try:
-        return get_vector_store().add_documents(documents, namespace=NORMES_NAMESPACE)
+        return get_vector_store().add_documents(documents, namespace=DOCUMENTS_NAMESPACE)
     except Exception as exc:  # noqa: BLE001
-        logger.error("add_norme_documents_failed", error=str(exc))
-        raise VectorStoreError("Failed to index norm document") from exc
+        logger.error("add_document_chunks_failed", error=str(exc))
+        raise VectorStoreError("Failed to index document") from exc
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
-def search_normes(query: str, *, top_k: int = 5) -> list[tuple[Document, float]]:
-    """Search the norms namespace, returning (document, score) pairs for citations."""
+def search_documents(query: str, *, top_k: int = 5) -> list[tuple[Document, float]]:
+    """Search the documents namespace, returning (document, score) pairs for citations."""
     try:
         return get_vector_store().similarity_search_with_score(
-            query, k=top_k, namespace=NORMES_NAMESPACE
+            query, k=top_k, namespace=DOCUMENTS_NAMESPACE
         )
     except Exception as exc:  # noqa: BLE001
-        logger.error("search_normes_failed", error=str(exc))
-        raise VectorStoreError("Norm search failed") from exc
+        logger.error("search_documents_failed", error=str(exc))
+        raise VectorStoreError("Document search failed") from exc
 
 
-def delete_norme_vectors(ids: list[str]) -> None:
-    """Remove a norm document's vectors from the 'normes' namespace by id."""
+def delete_document_vectors(ids: list[str]) -> None:
+    """Remove a document's vectors from the 'documents' namespace by id."""
     if not ids:
         return
     try:
-        get_vector_store().delete(ids=ids, namespace=NORMES_NAMESPACE)
+        get_vector_store().delete(ids=ids, namespace=DOCUMENTS_NAMESPACE)
     except Exception as exc:  # noqa: BLE001
-        logger.error("delete_norme_vectors_failed", error=str(exc))
-        raise VectorStoreError("Failed to delete norm vectors") from exc
+        logger.error("delete_document_vectors_failed", error=str(exc))
+        raise VectorStoreError("Failed to delete document vectors") from exc

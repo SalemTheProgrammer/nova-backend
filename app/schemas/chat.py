@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -11,6 +12,10 @@ class ChatRequest(BaseModel):
     thread_id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
         description="Conversation thread id; reuse to keep multi-turn memory.",
+    )
+    mode: Literal["texte", "voix"] = Field(
+        default="texte",
+        description="'voix' quand la réponse sera lue à voix haute : l'agent répond court, registre parlé.",
     )
 
     model_config = {
@@ -23,18 +28,3 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     thread_id: str
     response: str
-
-
-class IngestDocument(BaseModel):
-    content: str = Field(..., min_length=1)
-    source: str | None = Field(default=None, description="Optional source identifier")
-    metadata: dict[str, str] = Field(default_factory=dict)
-
-
-class IngestRequest(BaseModel):
-    documents: list[IngestDocument] = Field(..., min_length=1, max_length=100)
-
-
-class IngestResponse(BaseModel):
-    ingested: int
-    ids: list[str]

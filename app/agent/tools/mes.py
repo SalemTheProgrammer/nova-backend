@@ -19,8 +19,8 @@ _LIBELLE_PERTE = {
 }
 
 
-@tool
-def etat_machine(code_ou_id: str) -> str:
+@tool(response_format="content_and_artifact")
+def etat_machine(code_ou_id: str) -> tuple[str, dict | None]:
     """Donne l'état courant d'une machine (statut, OF actif, production, TRS/TQ/TP/DO).
 
     `code_ou_id` accepte le code (ex. 'M-01') ou l'id numérique.
@@ -34,7 +34,7 @@ def etat_machine(code_ou_id: str) -> str:
                 select(Machine).where(Machine.code == code_ou_id)
             ).scalars().first()
         if machine is None:
-            return f"Machine introuvable : {code_ou_id}"
+            return f"Machine introuvable : {code_ou_id}", None
 
         lignes = [
             f"Machine {machine.code} ({machine.nom}) : statut {machine.statut.value}",
@@ -42,17 +42,37 @@ def etat_machine(code_ou_id: str) -> str:
             f"Production : {machine.quantite_produite} unités "
             f"({machine.quantite_bonne} bonnes, {machine.quantite_rejetee} rebuts)",
         ]
+        artifact: dict = {
+            "kind": "machine",
+            "machine_id": machine.id,
+            "code": machine.code,
+            "nom": machine.nom,
+            "statut": machine.statut.value,
+            "of_actif": machine.ordre_fabrication.numero if machine.ordre_fabrication else None,
+            "quantite_produite": machine.quantite_produite,
+            "quantite_bonne": machine.quantite_bonne,
+            "quantite_rejetee": machine.quantite_rejetee,
+        }
         if machine.temps_cycle_cible_s:
             r = trs_service.calculer_trs_machine(db, machine)
             lignes.append(
                 f"TRS : {r.trs * 100:.0f}% (TQ {r.tq * 100:.0f}% / TP {r.tp * 100:.0f}% / "
                 f"DO {r.do * 100:.0f}%) — perte principale : {_LIBELLE_PERTE[r.pertes.principale]}"
             )
-        return "\n".join(lignes)
+            artifact.update(
+                {
+                    "trs": float(r.trs),
+                    "tq": float(r.tq),
+                    "tp": float(r.tp),
+                    "do": float(r.do),
+                    "perte_principale": r.pertes.principale,
+                }
+            )
+        return "\n".join(lignes), artifact
 
 
-@tool
-def resume_trs(scope: str, id: int) -> str:
+@tool(response_format="content_and_artifact")
+def resume_trs(scope: str, id: int) -> tuple[str, dict | None]:
     """Résumé TRS/TRG/TRE pour une machine, une ligne ou un OF.
 
     `scope` doit valoir 'machine', 'ligne' ou 'of'. `id` est l'id correspondant.
@@ -61,7 +81,7 @@ def resume_trs(scope: str, id: int) -> str:
         if scope == "machine":
             machine = db.get(Machine, id)
             if machine is None:
-                return f"Machine introuvable (id={id})."
+                return f"Machine introuvable (id={id}).", None
             r = trs_service.calculer_trs_machine(db, machine)
             libelle = machine.code
         elif scope == "ligne":
@@ -70,25 +90,39 @@ def resume_trs(scope: str, id: int) -> str:
             )
             resultat = trs_service.calculer_trs_ligne(db, machines)
             if resultat is None:
-                return f"Aucune machine avec un temps de cycle cible sur la ligne id={id}."
+                return f"Aucune machine avec un temps de cycle cible sur la ligne id={id}.", None
             r = resultat
             libelle = f"ligne id={id}"
         elif scope == "of":
             of = db.get(OrdreFabrication, id)
             if of is None:
-                return f"OF introuvable (id={id})."
+                return f"OF introuvable (id={id}).", None
             r = trs_service.calculer_trs_ordre(db, of)
             libelle = of.numero
         else:
-            return "scope invalide : utilisez 'machine', 'ligne' ou 'of'."
+            return "scope invalide : utilisez 'machine', 'ligne' ou 'of'.", None
 
+        artifact = {
+            "kind": "trs",
+            "scope": scope,
+            "libelle": libelle,
+            "trs": float(r.trs),
+            "trg": float(r.trg),
+            "tre": float(r.tre),
+            "tq": float(r.tq),
+            "tp": float(r.tp),
+            "do": float(r.do),
+            "perte_principale": r.pertes.principale,
+            "quantite_bonne": r.quantite_bonne,
+            "quantite_rejetee": r.quantite_rejetee,
+        }
         return (
             f"TRS de {libelle} : {r.trs * 100:.0f}% | TRG {r.trg * 100:.0f}% | TRE {r.tre * 100:.0f}%\n"
             f"  TQ (qualité) {r.tq * 100:.0f}% | TP (performance) {r.tp * 100:.0f}% | "
             f"DO (disponibilité) {r.do * 100:.0f}%\n"
             f"  Perte principale : {_LIBELLE_PERTE[r.pertes.principale]}\n"
             f"  Production : {r.quantite_bonne} bonnes, {r.quantite_rejetee} rebuts"
-        )
+        ), artifact
 
 
 @tool

@@ -37,7 +37,32 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         ensure_index_exists()
     except Exception as exc:  # noqa: BLE001
         logger.warning("pinecone_index_check_skipped", error=str(exc))
+
+    # Enregistre la boucle serveur pour les broadcasts depuis les threads
+    # (outils agent, superviseur, simulation auto).
+    import asyncio
+
+    from app.services.websocket_manager import manager
+
+    manager.set_loop(asyncio.get_running_loop())
+
+    background_tasks: list[asyncio.Task] = []
+    if settings.supervisor_enabled:
+        from app.services.supervisor_service import boucle_superviseur
+
+        background_tasks.append(asyncio.create_task(boucle_superviseur()))
+    if settings.auto_sim_autostart:
+        from app.services.auto_simulator import auto_simulator
+
+        auto_simulator.demarrer()
+
     yield
+
+    from app.services.auto_simulator import auto_simulator
+
+    auto_simulator.arreter()
+    for task in background_tasks:
+        task.cancel()
     logger.info("shutdown")
 
 
@@ -83,6 +108,10 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.api_prefix)
+
+    from app.api.routes.console import router as console_router
+
+    app.include_router(console_router)
 
     from app.websockets.dashboard_ws import register_websocket_routes
 

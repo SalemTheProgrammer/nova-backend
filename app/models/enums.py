@@ -128,3 +128,13 @@ class TypeEvenementQualite(str, Enum):
 
     BONNE = "BONNE"
     REBUT = "REBUT"
+
+
+class StatutProposition(str, Enum):
+    """Cycle de vie d'une proposition d'action du superviseur autonome."""
+
+    PROPOSEE = "PROPOSEE"
+    APPROUVEE = "APPROUVEE"
+    REJETEE = "REJETEE"
+    EXECUTEE = "EXECUTEE"
+    ECHOUEE = "ECHOUEE"

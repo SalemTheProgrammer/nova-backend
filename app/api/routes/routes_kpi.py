@@ -13,8 +13,11 @@ from app.models import Machine, OrdreFabrication
 from app.schemas.ai_schema import InsightsRead
 from app.schemas.kpi_schema import (
     ActiviteRead,
+    ArretCategorieRead,
     CauseArretResumeRead,
     DashboardResumeRead,
+    MatiereConsommeeRead,
+    OFActifRead,
     PertesRead,
     PointSerieRead,
     TempsModelRead,
@@ -78,8 +81,10 @@ def trs(
 
 
 @router.get("/dashboard/resume", response_model=DashboardResumeRead)
-def dashboard_resume(db: Session = Depends(get_db)) -> DashboardResumeRead:
-    r = dashboard_service.construire_resume(db)
+def dashboard_resume(
+    ligne_id: int | None = Query(default=None), db: Session = Depends(get_db)
+) -> DashboardResumeRead:
+    r = dashboard_service.construire_resume(db, ligne_id=ligne_id)
     return DashboardResumeRead(
         trs_global=r.trs_global,
         disponibilite=r.disponibilite,
@@ -97,6 +102,7 @@ def dashboard_resume(db: Session = Depends(get_db)) -> DashboardResumeRead:
         temps_arret_total_s=r.temps_arret_total_s,
         mttr_s=r.mttr_s,
         mtbf_s=r.mtbf_s,
+        mttf_s=r.mttf_s,
         nb_pannes=r.nb_pannes,
         top_causes_arret=[
             CauseArretResumeRead(cause=c.cause, duree_s=c.duree_s) for c in r.top_causes_arret
@@ -129,6 +135,44 @@ def dashboard_resume(db: Session = Depends(get_db)) -> DashboardResumeRead:
                 created_at=a.created_at,
             )
             for a in r.activite_recente
+        ],
+        of_actif=(
+            OFActifRead(
+                id=r.of_actif.id,
+                numero=r.of_actif.numero,
+                article_code=r.of_actif.article_code,
+                article_designation=r.of_actif.article_designation,
+                lot_produit=r.of_actif.lot_produit,
+                quantite_planifiee=r.of_actif.quantite_planifiee,
+                quantite_bonne=r.of_actif.quantite_bonne,
+                quantite_rejetee=r.of_actif.quantite_rejetee,
+                statut=r.of_actif.statut,
+                ligne_production_id=r.of_actif.ligne_production_id,
+            )
+            if r.of_actif
+            else None
+        ),
+        taux_charge=r.taux_charge,
+        taux_engagement=r.taux_engagement,
+        cadence_nominale_par_min=r.cadence_nominale_par_min,
+        production_theorique=r.production_theorique,
+        reste_a_produire=r.reste_a_produire,
+        arrets_planifies=ArretCategorieRead(
+            nb_actifs=r.arrets_planifies.nb_actifs, duree_totale_s=r.arrets_planifies.duree_totale_s
+        ),
+        arrets_non_planifies=ArretCategorieRead(
+            nb_actifs=r.arrets_non_planifies.nb_actifs,
+            duree_totale_s=r.arrets_non_planifies.duree_totale_s,
+        ),
+        micro_arrets_nombre=r.micro_arrets_nombre,
+        matieres_consommees=[
+            MatiereConsommeeRead(
+                code_mp=m.code_mp,
+                designation_mp=m.designation_mp,
+                numero_lot=m.numero_lot,
+                quantite=m.quantite,
+            )
+            for m in r.matieres_consommees
         ],
     )
 

@@ -1,4 +1,5 @@
-"""Ingestion de documents normatifs : extraction PDF par page, découpage, indexation.
+"""Ingestion de documents (normes, procédures, manuels…) : extraction PDF par page,
+découpage, indexation.
 
 Chaque chunk conserve son numéro de page pour permettre des citations précises.
 """
@@ -11,7 +12,7 @@ from pypdf import PdfReader
 
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
-from app.services.vector_store import add_norme_documents
+from app.services.vector_store import add_document_chunks
 
 logger = get_logger(__name__)
 
@@ -60,7 +61,7 @@ def _decouper(texte: str) -> list[str]:
 
 
 def construire_documents(
-    pages: list[tuple[int, str]], *, norme_id: int, norme_nom: str, fichier: str
+    pages: list[tuple[int, str]], *, document_id: int, document_nom: str, fichier: str
 ) -> list[Document]:
     """Transforme les pages en chunks LangChain avec métadonnées (page incluse)."""
     docs: list[Document] = []
@@ -70,9 +71,9 @@ def construire_documents(
                 Document(
                     page_content=chunk,
                     metadata={
-                        "type": "norme",
-                        "norme_id": norme_id,
-                        "norme_nom": norme_nom,
+                        "type": "document",
+                        "document_id": document_id,
+                        "document_nom": document_nom,
                         "source": fichier,
                         "page": numero_page,
                         "chunk": j,
@@ -83,15 +84,15 @@ def construire_documents(
 
 
 def ingerer_pdf(
-    pdf_bytes: bytes, *, norme_id: int, norme_nom: str, fichier: str
+    pdf_bytes: bytes, *, document_id: int, document_nom: str, fichier: str
 ) -> tuple[int, list[str]]:
     """Extrait, découpe et indexe un PDF. Renvoie (nb_pages, ids_vecteurs)."""
     pages = extraire_pages(pdf_bytes)
     if not pages:
         raise AppError("Aucun texte extractible (PDF scanné ? OCR requis).")
     docs = construire_documents(
-        pages, norme_id=norme_id, norme_nom=norme_nom, fichier=fichier
+        pages, document_id=document_id, document_nom=document_nom, fichier=fichier
     )
-    ids = add_norme_documents(docs)
-    logger.info("norme_indexee", norme=norme_nom, pages=len(pages), chunks=len(ids))
+    ids = add_document_chunks(docs)
+    logger.info("document_indexe", document=document_nom, pages=len(pages), chunks=len(ids))
     return len(pages), ids

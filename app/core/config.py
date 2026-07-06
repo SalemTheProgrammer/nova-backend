@@ -39,9 +39,32 @@ class Settings(BaseSettings):
 
     # LLM
     openai_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
+    llm_model: str = "gpt-5.4-nano"
     llm_temperature: float = 0.0
     embedding_model: str = "text-embedding-3-small"
+
+    # Voix (OpenAI audio)
+    stt_model: str = "gpt-4o-mini-transcribe"
+    tts_model: str = "gpt-4o-mini-tts"
+    tts_voice: str = "alloy"
+
+    # Superviseur autonome / simulation
+    supervisor_enabled: bool = True
+    auto_sim_autostart: bool = False
+
+    # Notifications sortantes (envoi du bilan / messages par Nova)
+    # E-mail : n'importe quel SMTP (Gmail : smtp.gmail.com + mot de passe d'application).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""  # défaut : smtp_user
+    # WhatsApp : service Baileys local (dossier whatsapp/ du projet, `npm start`
+    # puis scan du QR code une seule fois).
+    whatsapp_service_url: str = "http://localhost:3001"
+
+    # Base documentaire (RAG) — stockage des PDF sources pour consultation/citations
+    documents_pdf_dir: str = "./data/documents"
 
     # Pinecone
     pinecone_api_key: str = ""
@@ -53,7 +76,6 @@ class Settings(BaseSettings):
     # Agent
     agent_max_iterations: int = 8
     agent_recursion_limit: int = 25
-    retrieval_top_k: int = 4
 
     @field_validator("cors_origins", "api_keys", mode="before")
     @classmethod
