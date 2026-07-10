@@ -24,7 +24,11 @@ async def run_agent(message: str, *, thread_id: str, mode: str = "texte") -> str
     settings = get_settings()
     graph = get_compiled_graph()
     config = {
-        "configurable": {"thread_id": thread_id},
+        # `invocation_id` change à chaque appel : c'est ce qui permet au garde-fou
+        # de confirmation (voir `agent/tools/confirmation_gate.py`) de distinguer
+        # « le modèle se re-confirme lui-même dans la même boucle » d'un vrai
+        # aller-retour avec l'opérateur (message suivant = invocation différente).
+        "configurable": {"thread_id": thread_id, "invocation_id": str(uuid.uuid4())},
         "recursion_limit": settings.agent_recursion_limit,
     }
     try:
@@ -82,7 +86,7 @@ async def stream_agent(message: str, *, thread_id: str, mode: str = "texte") -> 
     settings = get_settings()
     graph = get_compiled_graph()
     config = {
-        "configurable": {"thread_id": thread_id},
+        "configurable": {"thread_id": thread_id, "invocation_id": str(uuid.uuid4())},
         "recursion_limit": settings.agent_recursion_limit,
     }
     final_text = ""

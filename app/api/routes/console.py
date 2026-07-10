@@ -6,6 +6,10 @@ vanilla. La page consomme directement l'API JSON existante
 (`/api/v1/simulateur/...`, `/api/v1/machines`, `/api/v1/ordres-fabrication`)
 et écoute `/ws/dashboard` pour les mises à jour temps réel — aucun nouvel
 endpoint métier n'était nécessaire.
+
+Mise en page : console 100vh sans défilement de page (chaque panneau défile en
+interne), pensée pour être comprise en démo par un public non technique —
+bandeau « 1. Lancer la production / 2. Provoquer un incident / 3. Nova réagit ».
 """
 from __future__ import annotations
 
@@ -22,180 +26,258 @@ _PAGE = r"""<!doctype html>
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Nova — Console Usine</title>
+<title>Nova — Console usine</title>
 <style>
   :root{
-    --bg:#f7f8fa; --card:#ffffff; --border:#e5e7eb; --text:#111827; --muted:#6b7280;
-    --primary:#111827; --primary-fg:#ffffff;
-    --green:#059669; --green-bg:#05966915; --amber:#d97706; --amber-bg:#d9770615;
-    --red:#dc2626; --red-bg:#dc262615; --blue:#2563eb; --blue-bg:#2563eb15;
-    --radius:12px;
+    --bg:#eef0f3; --panel:#ffffff; --border:#d7dce2; --text:#1b2430; --muted:#68727e;
+    --accent:#1f5eff; --accent-fg:#ffffff;
+    --green:#0e7a52; --green-bg:#0e7a5214; --amber:#b45f06; --amber-bg:#b45f0614;
+    --red:#c22a2a; --red-bg:#c22a2a12; --blue:#1f5eff; --blue-bg:#1f5eff12;
   }
   *{box-sizing:border-box;}
-  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 -apple-system,Segoe UI,Inter,system-ui,sans-serif;}
-  .wrap{max-width:1400px;margin:0 auto;padding:20px 24px 40px;}
-  header{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px;flex-wrap:wrap;}
-  h1{font-size:18px;margin:0;font-weight:700;}
-  p.sub{margin:2px 0 0;color:var(--muted);font-size:12.5px;}
-  .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;font-size:12px;font-weight:600;}
-  .pill.on{background:var(--green-bg);color:var(--green);}
-  .pill.off{background:var(--red-bg);color:var(--red);}
-  .dot{width:7px;height:7px;border-radius:999px;background:currentColor;}
-  .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;}
-  .grid{display:grid;gap:16px;}
-  .cols-2{grid-template-columns:1.15fr 1fr;}
-  @media(max-width:980px){.cols-2{grid-template-columns:1fr;}}
-  .row{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;}
-  label.field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted);font-weight:600;}
-  select,input[type=text],input[type=number]{
-    height:34px;border:1px solid var(--border);border-radius:8px;padding:0 10px;font-size:13px;background:#fff;color:var(--text);
+  html,body{height:100%;}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font:13.5px/1.45 "Segoe UI",-apple-system,system-ui,sans-serif;
+    display:flex;flex-direction:column;overflow:hidden;
   }
-  select{min-width:200px;}
-  h3{font-size:13px;margin:0 0 10px;font-weight:700;}
-  .muted{color:var(--muted);}
-  button{
-    cursor:pointer;border-radius:9px;border:1px solid var(--border);background:#fff;color:var(--text);
-    font-size:13px;font-weight:600;padding:0 14px;height:34px;display:inline-flex;align-items:center;gap:6px;
-    transition:filter .12s;
-  }
-  button:hover:not(:disabled){filter:brightness(0.97);}
-  button:disabled{opacity:.45;cursor:not-allowed;}
-  button.primary{background:var(--primary);color:var(--primary-fg);border-color:var(--primary);}
-  button.danger{background:var(--red-bg);color:var(--red);border-color:transparent;}
-  button.big{height:52px;font-size:14px;flex:1;justify-content:center;}
-  .btn-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
-  @media(max-width:560px){.btn-grid{grid-template-columns:repeat(2,1fr);}}
-  .scenario{
-    text-align:left;border-radius:10px;border:1px solid var(--border);background:#fff;padding:10px 12px;
-    height:auto;flex-direction:column;align-items:flex-start;gap:2px;font-weight:600;
-  }
-  .scenario small{font-weight:400;color:var(--muted);white-space:normal;line-height:1.35;}
-  .scenarios{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
-  @media(max-width:780px){.scenarios{grid-template-columns:1fr;}}
-  .state{display:flex;align-items:center;gap:22px;flex-wrap:wrap;}
-  .badge{
-    display:flex;flex-direction:column;align-items:center;gap:4px;border:2px solid var(--border);
-    border-radius:14px;padding:14px 20px;min-width:150px;
-  }
-  .badge .ic{font-size:26px;line-height:1;}
-  .badge .lbl{font-size:15px;font-weight:700;}
-  .badge .sub{font-size:12px;opacity:.8;}
-  .stat{text-align:center;}
-  .stat .num{font-size:22px;font-weight:800;}
-  .stat .lbl{font-size:11px;color:var(--muted);}
-  .downtime-banner{margin-top:14px;border-radius:10px;border:1px solid var(--red);background:var(--red-bg);color:var(--red);padding:9px 14px;font-size:12.5px;text-align:center;}
-  .section-title{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700;margin:14px 0 8px;}
-  .range-row{display:flex;flex-direction:column;gap:6px;}
-  details{border-top:1px solid var(--border);margin-top:14px;padding-top:10px;}
-  summary{cursor:pointer;font-size:12.5px;font-weight:600;color:var(--muted);}
-  .log{height:340px;overflow-y:auto;border:1px solid var(--border);border-radius:10px;}
-  .log .row-item{padding:8px 12px;border-bottom:1px solid var(--border);font-size:12.5px;}
-  .log .row-item:last-child{border-bottom:none;}
-  .log .row-item .top{display:flex;justify-content:space-between;font-weight:600;}
-  .log .row-item .time{color:var(--muted);font-weight:400;}
-  .log .row-item .payload{margin-top:2px;color:var(--muted);font-family:ui-monospace,Consolas,monospace;font-size:11px;}
-  .empty{padding:32px 12px;text-align:center;color:var(--muted);font-size:12.5px;}
-  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--text);color:#fff;
-    padding:10px 18px;border-radius:10px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.18);opacity:0;
-    transition:opacity .2s;pointer-events:none;z-index:50;max-width:520px;text-align:center;}
-  .toast.show{opacity:1;}
-  .toast.error{background:var(--red);}
-  .tag-list{margin-top:8px;font-family:ui-monospace,Consolas,monospace;font-size:11.5px;color:var(--muted);}
+  .mono{font-family:ui-monospace,Consolas,monospace;}
 
-  /* --- Canvas de flux (façon n8n) : lignes = nœuds, liens = flux matière --- */
-  .flux-wrap{position:relative;overflow-x:auto;}
+  /* ---------- Bandeau haut ---------- */
+  header{
+    flex:none;height:50px;background:#141b24;color:#e9edf2;
+    display:flex;align-items:center;gap:14px;padding:0 16px;
+  }
+  header .titre{font-size:14.5px;font-weight:700;letter-spacing:.02em;white-space:nowrap;}
+  header .titre span{color:#8fa2b8;font-weight:500;}
+  header .sous{color:#8fa2b8;font-size:12px;flex:1;min-width:0;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap;}
+  .pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;
+    font-size:11.5px;font-weight:600;white-space:nowrap;}
+  .pill .dot{width:7px;height:7px;border-radius:999px;background:currentColor;}
+  .pill.on{background:#12351f;color:#4ade80;}
+  .pill.off{background:#3a1d1d;color:#f28b8b;}
+
+  /* ---------- Corps 100vh ---------- */
+  main{
+    flex:1;min-height:0;display:grid;gap:10px;padding:10px;
+    grid-template-columns:minmax(0,1.7fr) minmax(300px,.8fr);
+  }
+  .colonne{display:flex;flex-direction:column;gap:10px;min-height:0;min-width:0;}
+  .panel{
+    background:var(--panel);border:1px solid var(--border);border-radius:8px;
+    display:flex;flex-direction:column;min-height:0;overflow:hidden;
+  }
+  .panel-titre{
+    flex:none;display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;
+    padding:9px 14px;border-bottom:1px solid var(--border);
+  }
+  .panel-titre b{font-size:12px;text-transform:uppercase;letter-spacing:.06em;}
+  .panel-titre small{color:var(--muted);font-size:11.5px;}
+
+  /* ---------- Bandeau démo : 3 étapes ---------- */
+  .demo{flex:none;display:flex;align-items:stretch;gap:10px;padding:10px 14px;flex-wrap:wrap;}
+  .etape{display:flex;align-items:center;gap:10px;min-width:0;}
+  .etape .num{
+    flex:none;width:22px;height:22px;border-radius:999px;background:#141b24;color:#fff;
+    font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;
+  }
+  .fleche{align-self:center;color:var(--muted);font-size:16px;}
+  button{
+    cursor:pointer;border-radius:6px;border:1px solid var(--border);background:#fff;color:var(--text);
+    font-size:13px;font-weight:600;padding:0 12px;height:32px;display:inline-flex;
+    align-items:center;gap:6px;font-family:inherit;
+  }
+  button:hover:not(:disabled){background:#f3f5f8;}
+  button:disabled{opacity:.45;cursor:not-allowed;}
+  button.primary{background:var(--accent);color:var(--accent-fg);border-color:var(--accent);}
+  button.primary:hover:not(:disabled){background:#1b52dd;}
+  button.danger{background:var(--red-bg);color:var(--red);border-color:transparent;}
+  button.auto{height:40px;font-size:13.5px;background:var(--accent);color:#fff;border-color:var(--accent);}
+  button.auto:hover:not(:disabled){background:#1b52dd;}
+  button.auto.on{background:var(--green-bg);color:var(--green);border-color:var(--green);}
+  button.auto.on:hover:not(:disabled){background:#0e7a5222;}
+  .incident{
+    height:40px;text-align:left;font-weight:600;border-left:3px solid var(--border);
+    display:flex;flex-direction:column;justify-content:center;gap:0;line-height:1.25;padding:0 12px;
+  }
+  .incident small{font-weight:400;color:var(--muted);font-size:11px;}
+  .incident.panne{border-left-color:var(--red);}
+  .incident.qualite{border-left-color:var(--amber);}
+  .incident.stock{border-left-color:var(--blue);}
+  .etape .texte{font-size:12px;color:var(--muted);line-height:1.35;max-width:230px;}
+  .etape .texte b{color:var(--text);}
+
+  /* ---------- Plan de l'usine (flux) ---------- */
+  .flux-panel{flex:1.1;min-height:150px;}
+  .flux-wrap{flex:1;min-height:0;overflow:auto;position:relative;}
   #fluxSvg{display:block;min-width:100%;}
   .flux-node{cursor:pointer;}
-  .flux-node rect.body{fill:#fff;stroke:var(--border);stroke-width:1.5;rx:12;transition:stroke .15s;}
-  .flux-node.selected rect.body{stroke:var(--blue);stroke-width:2.5;}
+  .flux-node rect.body{fill:#fff;stroke:var(--border);stroke-width:1.5;transition:stroke .15s;}
+  .flux-node.selected rect.body{stroke:var(--accent);stroke-width:2.5;}
   .flux-node text{font-family:inherit;}
   .flux-node .titre{font-size:13px;font-weight:700;fill:var(--text);}
   .flux-node .sous{font-size:10.5px;fill:var(--muted);}
   .flux-node .trs{font-size:11px;font-weight:700;}
-  .flux-edge{fill:none;stroke:var(--blue);stroke-width:2;stroke-dasharray:7 6;
+  .flux-edge{fill:none;stroke:var(--accent);stroke-width:2;stroke-dasharray:7 6;
     animation:flux-dash .7s linear infinite;cursor:pointer;}
   .flux-edge:hover{stroke:var(--red);stroke-width:3;}
   .flux-edge-hit{fill:none;stroke:transparent;stroke-width:14;cursor:pointer;}
   @keyframes flux-dash{to{stroke-dashoffset:-13;}}
-  .flux-bar{display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;
-    padding:12px 16px;border-bottom:1px solid var(--border);}
-  .flux-bar h3{margin:0;flex:1;min-width:160px;}
-  .articles-panel{border-top:1px solid var(--border);padding:12px 16px;}
-  .articles-panel .liste{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;}
-  .articles-panel label{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;
-    border:1px solid var(--border);border-radius:999px;padding:5px 10px;cursor:pointer;}
-  .articles-panel label.on{background:var(--blue-bg);border-color:var(--blue);color:var(--blue);font-weight:600;}
+  .lier-bar{display:flex;gap:8px;align-items:flex-end;margin-left:auto;}
+  .articles-panel{flex:none;border-top:1px solid var(--border);padding:10px 14px;max-height:110px;overflow:auto;}
+  .articles-panel .liste{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;}
+  .articles-panel label{display:inline-flex;align-items:center;gap:5px;font-size:12px;
+    border:1px solid var(--border);border-radius:999px;padding:4px 10px;cursor:pointer;}
+  .articles-panel label.on{background:var(--blue-bg);border-color:var(--accent);color:var(--accent);font-weight:600;}
+
+  /* ---------- Pupitre machine ---------- */
+  .pupitre{flex:1.3;}
+  .pupitre-corps{flex:1;min-height:0;overflow:auto;padding:12px 14px;}
+  .row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;}
+  label.field{display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--muted);font-weight:600;}
+  select,input[type=text],input[type=number]{
+    height:32px;border:1px solid var(--border);border-radius:6px;padding:0 8px;
+    font-size:13px;background:#fff;color:var(--text);font-family:inherit;
+  }
+  select{min-width:180px;}
+  .etat{
+    display:flex;align-items:center;gap:20px;flex-wrap:wrap;
+    border:1px solid var(--border);border-radius:6px;padding:10px 14px;margin-top:10px;background:#fafbfc;
+  }
+  .etat .statut{display:flex;align-items:center;gap:8px;font-weight:700;font-size:14px;min-width:150px;}
+  .etat .statut .dot{width:11px;height:11px;border-radius:999px;flex:none;}
+  .etat .statut small{display:block;font-weight:400;color:var(--muted);font-size:11px;}
+  .stat{text-align:center;}
+  .stat .num{font-size:19px;font-weight:800;}
+  .stat .lbl{font-size:10.5px;color:var(--muted);}
+  .downtime-banner{margin-top:8px;border-radius:6px;border:1px solid var(--red);
+    background:var(--red-bg);color:var(--red);padding:7px 12px;font-size:12px;}
+  .btn-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;}
+  .btn-grid button{height:42px;font-size:13.5px;justify-content:center;}
+  .section-title{font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;
+    color:var(--muted);font-weight:700;margin:14px 0 6px;}
+  details{border-top:1px solid var(--border);margin-top:14px;padding-top:8px;}
+  summary{cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);}
+  .tag-list{margin-top:8px;font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--muted);}
+  .empty{padding:26px 12px;text-align:center;color:var(--muted);font-size:12.5px;}
+
+  /* ---------- Journal ---------- */
+  .log{flex:1;min-height:0;overflow-y:auto;}
+  .log .row-item{padding:7px 14px;border-bottom:1px solid var(--border);font-size:12px;}
+  .log .row-item:last-child{border-bottom:none;}
+  .log .row-item .top{display:flex;justify-content:space-between;gap:8px;font-weight:600;}
+  .log .row-item .time{color:var(--muted);font-weight:400;flex:none;}
+  .log .row-item .payload{margin-top:1px;color:var(--muted);font-family:ui-monospace,Consolas,monospace;font-size:10.5px;}
+
+  .toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#141b24;color:#fff;
+    padding:10px 18px;border-radius:8px;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.22);opacity:0;
+    transition:opacity .2s;pointer-events:none;z-index:50;max-width:560px;text-align:center;}
+  .toast.show{opacity:1;}
+  .toast.error{background:var(--red);}
+
+  /* Petits écrans : empilement simple avec défilement de page (plus de 100vh strict). */
+  @media(max-width:980px){
+    body{overflow:auto;height:auto;}
+    main{display:flex;flex-direction:column;flex:none;height:auto;min-height:0;}
+    .colonne{min-height:auto;}
+    .panel{min-height:0;flex:none;}
+    .flux-wrap{max-height:300px;}
+    .pupitre-corps{overflow:visible;}
+    .log{max-height:320px;}
+    header .sous{display:none;}
+  }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div>
-      <h1>Console Usine</h1>
-      <p class="sub">Flux des lignes (façon n8n) + pupitre de simulation — chaque action envoie un événement réel, comme un automate.</p>
-    </div>
-    <div style="display:flex;gap:8px;align-items:center;">
-      <span id="wsPill" class="pill off"><span class="dot"></span> WebSocket…</span>
-      <button id="autoBtn" onclick="toggleAuto()">Simulation auto : …</button>
-    </div>
-  </header>
 
-  <div class="card scenarios" style="margin-bottom:16px;">
-    <button class="scenario" onclick="lancerScenario('panne-critique')">
-      ⚡ Panne critique <small>Surchauffe broche sur une machine en production : l'OF est bloqué.</small>
-    </button>
-    <button class="scenario" onclick="lancerScenario('derive-qualite')">
-      🧪 Dérive qualité <small>Rafale de rebuts (mauvais réglage) : le taux de rebut explose.</small>
-    </button>
-    <button class="scenario" onclick="lancerScenario('rupture-stock')">
-      📦 Rupture de stock <small>Le stock d'une matière première passe sous le seuil d'alerte.</small>
-    </button>
-  </div>
+<header>
+  <div class="titre">NOVA <span>· Console usine</span></div>
+  <div class="sous">Simulateur d'atelier : chaque bouton envoie un vrai événement machine au système, comme le ferait un automate.</div>
+  <span id="wsPill" class="pill off"><span class="dot"></span> Temps réel…</span>
+</header>
 
-  <div class="card" style="margin-bottom:16px;padding:0;overflow:hidden;">
-    <div class="flux-bar">
-      <h3>Flux des lignes <small class="muted" style="font-weight:400;">— nœuds = lignes, flèches = la sortie alimente l'entrée · cliquez un nœud pour ses articles, une flèche pour la supprimer</small></h3>
-      <label class="field">Source
-        <select id="lienSource" style="min-width:140px;"></select>
-      </label>
-      <label class="field">→ alimente
-        <select id="lienTarget" style="min-width:140px;"></select>
-      </label>
-      <button class="primary" onclick="creerLien()">Lier</button>
-    </div>
-    <div class="flux-wrap"><svg id="fluxSvg"></svg></div>
-    <div class="articles-panel" id="articlesPanel" style="display:none;">
-      <div style="font-size:12.5px;font-weight:700;" id="articlesTitre"></div>
-      <div class="liste" id="articlesListe"></div>
-    </div>
-  </div>
+<main>
+  <div class="colonne">
 
-  <div class="grid cols-2">
-    <div class="grid" style="align-content:start;">
-      <div class="card row">
-        <label class="field">Machine
-          <select id="machineSelect" onchange="onMachineChange()"></select>
-        </label>
-        <label class="field">Ordre de fabrication
-          <select id="ordreSelect"><option value="">— aucun —</option></select>
-        </label>
+    <!-- Étapes de démo : 1 lancer, 2 provoquer, 3 Nova réagit -->
+    <div class="panel">
+      <div class="demo">
+        <div class="etape">
+          <div class="num">1</div>
+          <button id="autoBtn" class="auto" onclick="toggleAuto()">…</button>
+        </div>
+        <div class="fleche">→</div>
+        <div class="etape">
+          <div class="num">2</div>
+          <button class="incident panne" onclick="lancerScenario('panne-critique')">
+            Provoquer une panne <small>une machine en production s'arrête net</small>
+          </button>
+          <button class="incident qualite" onclick="lancerScenario('derive-qualite')">
+            Provoquer des défauts <small>trop de pièces rejetées d'un coup</small>
+          </button>
+          <button class="incident stock" onclick="lancerScenario('rupture-stock')">
+            Vider un stock <small>une matière première passe sous le seuil</small>
+          </button>
+        </div>
+        <div class="fleche">→</div>
+        <div class="etape">
+          <div class="num">3</div>
+          <div class="texte"><b>Nova détecte l'incident en quelques secondes</b> et propose une action sur le tableau de bord (et WhatsApp).</div>
+        </div>
       </div>
+    </div>
 
-      <div class="card" id="stateCard">
-        <div class="empty">Choisissez une machine ci-dessus.</div>
+    <!-- Plan de l'usine -->
+    <div class="panel flux-panel">
+      <div class="panel-titre">
+        <b>Plan de l'usine</b>
+        <small>chaque bloc est une ligne de production · les flèches montrent quelle ligne alimente laquelle · cliquez un bloc pour le piloter</small>
+        <div class="lier-bar">
+          <label class="field">Source
+            <select id="lienSource" style="min-width:110px;"></select>
+          </label>
+          <label class="field">alimente
+            <select id="lienTarget" style="min-width:110px;"></select>
+          </label>
+          <button onclick="creerLien()">Lier</button>
+        </div>
       </div>
+      <div class="flux-wrap"><svg id="fluxSvg"></svg></div>
+      <div class="articles-panel" id="articlesPanel" style="display:none;">
+        <div style="font-size:12px;font-weight:700;" id="articlesTitre"></div>
+        <div class="liste" id="articlesListe"></div>
+      </div>
+    </div>
 
-      <div class="card">
-        <h3>Commandes</h3>
-        <div class="btn-grid">
-          <button class="big primary" onclick="action('start')">▶ Démarrer</button>
-          <button class="big" onclick="action('pause')">⏸ Pause</button>
-          <button class="big danger" onclick="action('stop')">■ Arrêter</button>
-          <button class="big" onclick="action('alarme')">⚠ Alarme</button>
+    <!-- Pupitre machine -->
+    <div class="panel pupitre">
+      <div class="panel-titre">
+        <b>Piloter une machine</b>
+        <small>démarrer / arrêter une machine précise, ou provoquer des événements à la main</small>
+      </div>
+      <div class="pupitre-corps">
+        <div class="row">
+          <label class="field">Machine
+            <select id="machineSelect" onchange="onMachineChange()"></select>
+          </label>
+          <label class="field">Ordre de fabrication à produire
+            <select id="ordreSelect"><option value="">— aucun —</option></select>
+          </label>
         </div>
 
-        <details open>
-          <summary>Réglages avancés</summary>
+        <div id="stateCard"><div class="empty">Choisissez une machine ci-dessus.</div></div>
+
+        <div class="btn-grid">
+          <button class="primary" onclick="action('start')">▶ Démarrer</button>
+          <button onclick="action('pause')">⏸ Pause</button>
+          <button class="danger" onclick="action('stop')">■ Arrêter</button>
+          <button onclick="action('alarme')">⚠ Alarme</button>
+        </div>
+
+        <details>
+          <summary>Réglages avancés (production manuelle, arrêts, maintenance, capteurs)</summary>
+
           <div class="section-title">Temps de cycle</div>
           <div class="row">
             <label class="field">Secondes / unité
@@ -232,7 +314,7 @@ _PAGE = r"""<!doctype html>
 
           <div class="section-title">Maintenance</div>
           <div class="row">
-            <button onclick="demarrerMaintenance()">🔧 Démarrer maintenance</button>
+            <button onclick="demarrerMaintenance()">Démarrer maintenance</button>
             <button onclick="terminerMaintenance()">Terminer maintenance</button>
           </div>
 
@@ -250,17 +332,19 @@ _PAGE = r"""<!doctype html>
         </details>
       </div>
     </div>
+  </div>
 
-    <div class="grid" style="align-content:start;">
-      <div class="card" style="padding:0;overflow:hidden;">
-        <div style="padding:14px 16px;border-bottom:1px solid var(--border);">
-          <h3 style="margin:0;">Flux d'événements</h3>
-        </div>
-        <div class="log" id="eventLog"><div class="empty">Aucun événement pour le moment.</div></div>
+  <!-- Journal temps réel -->
+  <div class="colonne">
+    <div class="panel" style="flex:1;">
+      <div class="panel-titre">
+        <b>Journal des événements</b>
+        <small>tout ce qui se passe sur la machine sélectionnée, en direct</small>
       </div>
+      <div class="log" id="eventLog"><div class="empty">Aucun événement pour le moment.</div></div>
     </div>
   </div>
-</div>
+</main>
 
 <div id="toast" class="toast"></div>
 
@@ -278,8 +362,9 @@ const EVENT_LABEL = {
   MAINTENANCE_STARTED:"Maintenance démarrée", MAINTENANCE_ENDED:"Maintenance terminée", SENSOR_TAG_UPDATED:"Tag capteur mis à jour",
 };
 const STATUT_INFO = {
-  MARCHE:{ic:"🟢",label:"En marche"}, ARRET:{ic:"⚪",label:"À l'arrêt"}, PAUSE:{ic:"🟡",label:"En pause"},
-  PANNE:{ic:"🔴",label:"En panne"}, MAINTENANCE:{ic:"🔧",label:"Maintenance"},
+  MARCHE:{couleur:"#0e7a52",label:"En marche"}, ARRET:{couleur:"#9aa3ad",label:"À l'arrêt"},
+  PAUSE:{couleur:"#b45f06",label:"En pause"}, PANNE:{couleur:"#c22a2a",label:"En panne"},
+  MAINTENANCE:{couleur:"#1f5eff",label:"Maintenance"},
 };
 
 let machines = [];
@@ -384,25 +469,20 @@ async function refreshEvents(){
 function renderState(){
   const card = document.getElementById("stateCard");
   if (!machine){ card.innerHTML = '<div class="empty">Choisissez une machine ci-dessus.</div>'; return; }
-  const info = STATUT_INFO[machine.statut] || {ic:"⚙️", label:machine.statut};
+  const info = STATUT_INFO[machine.statut] || {couleur:"#9aa3ad", label:machine.statut};
   card.innerHTML =
-    '<div class="state">' +
-      '<div class="badge"><div class="ic">' + info.ic + '</div><div class="lbl">' + info.label + '</div><div class="sub">' + machine.nom + '</div></div>' +
+    '<div class="etat">' +
+      '<div class="statut"><span class="dot" style="background:' + info.couleur + '"></span>' +
+        '<span>' + info.label + '<small>' + machine.nom + '</small></span></div>' +
       '<div class="stat"><div class="num">' + (machine.trs != null ? Math.round(machine.trs*100)+"%" : "—") + '</div><div class="lbl">TRS</div></div>' +
       '<div class="stat"><div class="num" style="color:var(--green)">' + machine.quantite_bonne + '</div><div class="lbl">Unités bonnes</div></div>' +
       '<div class="stat"><div class="num" style="color:var(--red)">' + machine.quantite_rejetee + '</div><div class="lbl">Unités rejetées</div></div>' +
+      '<div class="stat"><div class="num">' + (machine.temps_cycle_actuel_s ?? machine.temps_cycle_cible_s ?? "—") + ' s</div><div class="lbl">Cycle / unité</div></div>' +
+      '<div class="stat"><div class="num mono" style="font-size:14px;">' + (machine.numero_of_actif || "—") + '</div><div class="lbl">OF en cours</div></div>' +
     '</div>' +
     (machine.downtime_actif ?
       '<div class="downtime-banner">Arrêt en cours : ' + machine.downtime_actif.cause.replaceAll("_"," ").toLowerCase() +
-      (machine.downtime_actif.operator_comment ? " — " + machine.downtime_actif.operator_comment : "") + '</div>' : '') +
-    '<details style="margin-top:14px;"><summary>Détails techniques</summary>' +
-      '<div class="row" style="margin-top:10px;">' +
-        '<div><div class="lbl muted">OF actif</div><div>' + (machine.numero_of_actif || "—") + '</div></div>' +
-        '<div><div class="lbl muted">Cycle</div><div>' + (machine.temps_cycle_actuel_s ?? machine.temps_cycle_cible_s ?? "—") + ' s</div></div>' +
-        '<div><div class="lbl muted">Qualité (TQ)</div><div>' + (machine.tq != null ? Math.round(machine.tq*100)+"%" : "—") + '</div></div>' +
-        '<div><div class="lbl muted">Disponibilité (DO)</div><div>' + (machine.do != null ? Math.round(machine.do*100)+"%" : "—") + '</div></div>' +
-      '</div>' +
-    '</details>';
+      (machine.downtime_actif.operator_comment ? " — " + machine.downtime_actif.operator_comment : "") + '</div>' : '');
 }
 
 async function run(promise){
@@ -482,9 +562,9 @@ async function lancerScenario(nom){
   } catch(e){ toast(e.message, true); }
 }
 
-/* ------------------- Canvas de flux des lignes (façon n8n) ------------------- */
+/* ------------------- Plan de l'usine (flux des lignes) ------------------- */
 const NODE_W = 200, NODE_H = 104, GAP_X = 260, GAP_Y = 140, PAD = 40;
-const STATUT_COULEUR = {MARCHE:"#059669", ARRET:"#9ca3af", PAUSE:"#d97706", PANNE:"#dc2626", MAINTENANCE:"#2563eb"};
+const STATUT_COULEUR = {MARCHE:"#0e7a52", ARRET:"#9aa3ad", PAUSE:"#b45f06", PANNE:"#c22a2a", MAINTENANCE:"#1f5eff"};
 let flux = null;            // {lignes, liens, articles}
 let ligneSelectionnee = null;
 
@@ -580,11 +660,11 @@ function renderFlux(){
     let chips = "";
     ms.slice(0, 5).forEach((m, i) => {
       const cx = 16 + i * 36;
-      chips += '<circle cx="' + cx + '" cy="82" r="5" fill="' + (STATUT_COULEUR[m.statut] || "#9ca3af") + '"></circle>' +
+      chips += '<circle cx="' + cx + '" cy="82" r="5" fill="' + (STATUT_COULEUR[m.statut] || "#9aa3ad") + '"></circle>' +
         '<text x="' + (cx + 8) + '" y="85" class="sous">' + esc(m.code) + '</text>';
     });
     out += '<g class="flux-node' + (ligneSelectionnee === l.id ? " selected" : "") + '" transform="translate(' + p.x + ',' + p.y + ')" onclick="choisirLigne(' + l.id + ')">' +
-      '<rect class="body" width="' + NODE_W + '" height="' + NODE_H + '" rx="12"></rect>' +
+      '<rect class="body" width="' + NODE_W + '" height="' + NODE_H + '" rx="10"></rect>' +
       '<text x="14" y="24" class="titre">' + esc(l.code) + '</text>' +
       '<text x="' + (NODE_W - 14) + '" y="24" text-anchor="end" class="trs" fill="' + trsCouleur + '">' + (trs != null ? Math.round(trs*100) + "%" : "—") + '</text>' +
       '<text x="14" y="42" class="sous">' + esc(l.designation).slice(0, 30) + '</text>' +
@@ -673,15 +753,15 @@ async function refreshAuto(){
 }
 function renderAutoBtn(){
   const btn = document.getElementById("autoBtn");
-  btn.textContent = autoActif ? "■ Simulation auto : active" : "▶ Démarrer la simulation auto";
-  btn.className = autoActif ? "primary" : "";
+  btn.textContent = autoActif ? "■ Production en cours — arrêter" : "▶ Lancer la production";
+  btn.className = "auto" + (autoActif ? " on" : "");
 }
 async function toggleAuto(){
   try {
     const r = await api("/simulateur/auto/" + (autoActif ? "stop" : "start"), {method:"POST", body:"{}"});
     autoActif = r.actif;
     renderAutoBtn();
-    toast(autoActif ? "Simulation autonome démarrée : les machines en marche produisent toutes seules." : "Simulation autonome arrêtée.");
+    toast(autoActif ? "Production lancée : les machines en marche produisent toutes seules." : "Production automatique arrêtée.");
   } catch(e){ toast(e.message, true); }
 }
 
@@ -689,9 +769,9 @@ function connectWs(){
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const ws = new WebSocket(proto + "://" + location.host + "/ws/dashboard");
   const pill = document.getElementById("wsPill");
-  ws.onopen = () => { pill.className = "pill on"; pill.innerHTML = '<span class="dot"></span> WebSocket connecté'; };
+  ws.onopen = () => { pill.className = "pill on"; pill.innerHTML = '<span class="dot"></span> Temps réel connecté'; };
   ws.onclose = () => {
-    pill.className = "pill off"; pill.innerHTML = '<span class="dot"></span> WebSocket déconnecté';
+    pill.className = "pill off"; pill.innerHTML = '<span class="dot"></span> Temps réel déconnecté';
     setTimeout(connectWs, 2000);
   };
   ws.onerror = () => ws.close();
@@ -699,7 +779,7 @@ function connectWs(){
     try {
       const msg = JSON.parse(evt.data);
       if (msg.type === "machine_update" && msg.machine){
-        // Met à jour la copie locale pour les pastilles du canvas de flux.
+        // Met à jour la copie locale pour les pastilles du plan de l'usine.
         const i = machines.findIndex(m => m.id === msg.machine.id);
         if (i >= 0) machines[i] = msg.machine;
         renderFlux();

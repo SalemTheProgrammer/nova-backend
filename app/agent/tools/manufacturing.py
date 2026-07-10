@@ -8,9 +8,11 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from sqlalchemy import select
 
+from app.agent.tools import confirmation_gate
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import session_scope
@@ -154,6 +156,8 @@ def creer_ordre_fabrication(
     confirmation: bool,
     date_fin_prevue: str | None = None,
     ligne_production_id: int | None = None,
+    *,
+    config: RunnableConfig,
 ) -> tuple[str, dict | None]:
     """Crée un ordre de fabrication : décrémente les matières premières en FEFO,
     enregistre la généalogie du lot, et planifie l'OF.
@@ -165,11 +169,24 @@ def creer_ordre_fabrication(
 
     `confirmation` DOIT valoir true uniquement si l'opérateur a confirmé explicitement.
     """
-    if not confirmation:
+    libelle = f"créer l'OF de {quantite} unité(s) de l'article id={article_id}"
+    if not confirmation_gate.evaluer(
+        config,
+        "creer_ordre_fabrication",
+        {
+            "article_id": article_id,
+            "quantite": quantite,
+            "date_fin_prevue": date_fin_prevue,
+            "ligne_production_id": ligne_production_id,
+        },
+        confirmation,
+    ):
         return (
-            "Confirmation requise : présentez d'abord les besoins/disponibilités et "
-            "demandez à l'opérateur de confirmer avant de créer l'OF (confirmation=true)."
-        ), None
+            f"Confirmation requise : {libelle}. Présentez d'abord les besoins/disponibilités "
+            "et demandez à l'opérateur de confirmer avant de rappeler cet outil "
+            "(confirmation=true).",
+            {"kind": "confirmation_attente", "libelle": libelle},
+        )
     try:
         d_fin = _parse_date(date_fin_prevue)
     except AppError as exc:

@@ -118,6 +118,124 @@ def stock_disponible_mp(db: Session, matiere_premiere_id: int) -> Decimal:
     return Decimal(str(total))
 
 
+def get_lot(db: Session, lot_id: int) -> LotMatierePremiere:
+    lot = db.get(LotMatierePremiere, lot_id)
+    if lot is None:
+        raise NotFoundError(f"Lot introuvable (id={lot_id})")
+    return lot
+
+
+def lister_lots(
+    db: Session,
+    *,
+    matiere_premiere_id: int | None = None,
+    statut: StatutLot | None = None,
+) -> list[LotMatierePremiere]:
+    """Liste des lots (tous MP confondus), triés FEFO puis par réception récente."""
+    stmt = select(LotMatierePremiere)
+    if matiere_premiere_id is not None:
+        stmt = stmt.where(LotMatierePremiere.matiere_premiere_id == matiere_premiere_id)
+    if statut is not None:
+        stmt = stmt.where(LotMatierePremiere.statut == statut)
+    stmt = stmt.order_by(
+        nullslast(LotMatierePremiere.date_peremption.asc()),
+        LotMatierePremiere.date_reception.desc(),
+        LotMatierePremiere.id.desc(),
+    )
+    return list(db.execute(stmt).scalars())
+
+
+def lister_mouvements(
+    db: Session,
+    *,
+    matiere_premiere_id: int | None = None,
+    lot_id: int | None = None,
+    limit: int = 200,
+) -> list[MouvementStock]:
+    """Journal d'audit des mouvements de stock, du plus récent au plus ancien."""
+    stmt = select(MouvementStock)
+    if matiere_premiere_id is not None:
+        stmt = stmt.where(MouvementStock.matiere_premiere_id == matiere_premiere_id)
+    if lot_id is not None:
+        stmt = stmt.where(MouvementStock.lot_matiere_premiere_id == lot_id)
+    stmt = stmt.order_by(MouvementStock.date_mouvement.desc(), MouvementStock.id.desc()).limit(
+        limit
+    )
+    return list(db.execute(stmt).scalars())
+
+
+def ajuster_stock(
+    db: Session,
+    *,
+    lot_id: int,
+    quantite_restante: Decimal,
+    commentaire: str | None = None,
+) -> LotMatierePremiere:
+    """Ajuste la quantité restante d'un lot (inventaire) et journalise l'écart.
+
+    L'écart signé (nouvelle − ancienne) est enregistré comme un mouvement AJUSTEMENT.
+    Le statut passe à ÉPUISÉ si la quantité tombe à 0, et redevient DISPONIBLE si on
+    ré-approvisionne un lot épuisé.
+    """
+    nouvelle = Decimal(str(quantite_restante))
+    if nouvelle < 0:
+        raise FabricationError("La quantité restante ne peut pas être négative.")
+    lot = get_lot(db, lot_id)
+
+    ancienne = lot.quantite_restante
+    ecart = nouvelle - ancienne
+    lot.quantite_restante = nouvelle
+    if nouvelle <= 0:
+        lot.statut = StatutLot.EPUISE
+    elif lot.statut == StatutLot.EPUISE:
+        lot.statut = StatutLot.DISPONIBLE
+
+    db.add(
+        MouvementStock(
+            type_mouvement=TypeMouvement.AJUSTEMENT,
+            matiere_premiere_id=lot.matiere_premiere_id,
+            lot_matiere_premiere_id=lot.id,
+            quantite=ecart,
+            reference_type="INVENTAIRE",
+            reference_id=lot.id,
+            commentaire=commentaire or f"Ajustement inventaire lot {lot.numero_lot}",
+        )
+    )
+    db.flush()
+    logger.info(
+        "stock_ajuste",
+        lot_id=lot.id,
+        numero_lot=lot.numero_lot,
+        ancienne=str(ancienne),
+        nouvelle=str(nouvelle),
+        ecart=str(ecart),
+    )
+    return lot
+
+
+def supprimer_lot(db: Session, lot_id: int) -> None:
+    """Supprime un lot et ses mouvements associés (réception/ajustement).
+
+    Refuse la suppression si le lot a été consommé par un OF (traçabilité), afin de
+    préserver la généalogie : bloquer/épuiser le lot est alors la bonne action.
+    """
+    lot = get_lot(db, lot_id)
+    conso = db.execute(
+        select(func.count())
+        .select_from(OFConsommationMP)
+        .where(OFConsommationMP.lot_matiere_premiere_id == lot_id)
+    ).scalar_one()
+    if conso:
+        raise FabricationError(
+            "Lot consommé par un OF — impossible à supprimer. Bloquez-le à la place.",
+            details={"lot_id": lot_id, "consommations": conso},
+        )
+    for mvt in lister_mouvements(db, lot_id=lot_id, limit=10_000):
+        db.delete(mvt)
+    db.delete(lot)
+    db.flush()
+
+
 def lots_fefo(db: Session, matiere_premiere_id: int) -> list[LotMatierePremiere]:
     """Lots disponibles d'une MP triés FEFO (péremption la plus proche d'abord)."""
     stmt = (

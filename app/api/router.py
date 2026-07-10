@@ -21,6 +21,8 @@ from app.api.routes import (
     routes_quality,
     routes_simulator,
     routes_voice,
+    stock,
+    whatsapp,
 )
 
 api_router = APIRouter()
@@ -28,6 +30,7 @@ api_router.include_router(health.router)
 api_router.include_router(chat.router)
 api_router.include_router(articles.router)
 api_router.include_router(matieres.router)
+api_router.include_router(stock.router)
 api_router.include_router(fournisseurs.router)
 api_router.include_router(lignes.router)
 api_router.include_router(routes_ligne_flux.router)
@@ -41,3 +44,4 @@ api_router.include_router(routes_maintenance.router)
 api_router.include_router(routes_kpi.router)
 api_router.include_router(routes_agent.router)
 api_router.include_router(routes_voice.router)
+api_router.include_router(whatsapp.router)

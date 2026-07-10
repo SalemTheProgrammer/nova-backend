@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from sqlalchemy import select
 
+from app.agent.tools import confirmation_gate
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import session_scope
@@ -33,6 +35,20 @@ CONFIRMATION_REQUISE = (
     "Confirmation requise : décrivez l'action à l'opérateur et demandez son accord "
     "explicite avant de rappeler cet outil avec confirmation=true."
 )
+
+
+def _demande_confirmation(libelle: str) -> tuple[str, dict]:
+    """Réponse + artifact quand le garde-fou refuse l'exécution (voir
+    `confirmation_gate`) : le frontend affiche une carte d'attente distincte
+    d'une simple étape de lecture, jamais une coche verte silencieuse."""
+    return (
+        f"Confirmation requise : {libelle}. " + CONFIRMATION_REQUISE,
+        {"kind": "confirmation_attente", "libelle": libelle},
+    )
+
+
+def _action_executee(libelle: str) -> dict:
+    return {"kind": "action_executee", "libelle": libelle}
 
 
 def _trouver_machine(db, code_ou_id: str) -> Machine | None:
@@ -271,101 +287,139 @@ def simuler_scenario_panne(
 # --------------------------------------------------------------------------- #
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def demarrer_machine(
-    code_ou_id: str, confirmation: bool, ordre_fabrication_id: int | None = None
-) -> str:
+    code_ou_id: str,
+    confirmation: bool,
+    ordre_fabrication_id: int | None = None,
+    *,
+    config: RunnableConfig,
+) -> tuple[str, dict | None]:
     """Démarre une machine (commande SCADA), éventuellement en lui affectant un OF.
 
     ACTION SUR L'ATELIER : demandez toujours l'accord explicite de l'opérateur avant
     d'appeler avec confirmation=true.
     """
-    if not confirmation:
-        return CONFIRMATION_REQUISE
+    libelle = f"démarrer la machine {code_ou_id}"
+    if not confirmation_gate.evaluer(
+        config, "demarrer_machine", {"code_ou_id": code_ou_id, "of": ordre_fabrication_id}, confirmation
+    ):
+        return _demande_confirmation(libelle)
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
-            return f"Machine introuvable : {code_ou_id}"
+            return f"Machine introuvable : {code_ou_id}", None
         try:
             simulator_service.demarrer(db, machine, ordre_fabrication_id=ordre_fabrication_id)
         except AppError as exc:
-            return f"❌ {exc.message}"
+            return f"❌ {exc.message}", None
         db.flush()
         broadcast_service.diffuser_machine(db, machine)
         of_txt = f" avec l'OF id={ordre_fabrication_id}" if ordre_fabrication_id else ""
-        return f"✅ Machine {machine.code} démarrée{of_txt}."
+        return f"✅ Machine {machine.code} démarrée{of_txt}.", _action_executee(libelle)
 
 
-@tool
-def arreter_machine(code_ou_id: str, confirmation: bool) -> str:
+@tool(response_format="content_and_artifact")
+def arreter_machine(
+    code_ou_id: str, confirmation: bool, *, config: RunnableConfig
+) -> tuple[str, dict | None]:
     """Arrête une machine (commande SCADA). ACTION SUR L'ATELIER : accord explicite
     de l'opérateur requis avant confirmation=true."""
-    if not confirmation:
-        return CONFIRMATION_REQUISE
+    libelle = f"arrêter la machine {code_ou_id}"
+    if not confirmation_gate.evaluer(
+        config, "arreter_machine", {"code_ou_id": code_ou_id}, confirmation
+    ):
+        return _demande_confirmation(libelle)
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
-            return f"Machine introuvable : {code_ou_id}"
+            return f"Machine introuvable : {code_ou_id}", None
         try:
             simulator_service.arreter(db, machine)
         except AppError as exc:
-            return f"❌ {exc.message}"
+            return f"❌ {exc.message}", None
         db.flush()
         broadcast_service.diffuser_machine(db, machine)
-        return f"✅ Machine {machine.code} arrêtée."
+        return f"✅ Machine {machine.code} arrêtée.", _action_executee(libelle)
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def resoudre_arret_machine(
-    code_ou_id: str, confirmation: bool, commentaire: str | None = None
-) -> str:
+    code_ou_id: str,
+    confirmation: bool,
+    commentaire: str | None = None,
+    *,
+    config: RunnableConfig,
+) -> tuple[str, dict | None]:
     """Clôture l'arrêt en cours d'une machine et la remet en service (commande SCADA).
     ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant confirmation=true."""
-    if not confirmation:
-        return CONFIRMATION_REQUISE
+    libelle = f"résoudre l'arrêt de {code_ou_id}"
+    if not confirmation_gate.evaluer(
+        config,
+        "resoudre_arret_machine",
+        {"code_ou_id": code_ou_id, "commentaire": commentaire},
+        confirmation,
+    ):
+        return _demande_confirmation(libelle)
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
-            return f"Machine introuvable : {code_ou_id}"
+            return f"Machine introuvable : {code_ou_id}", None
         try:
             simulator_service.resoudre_arret(db, machine, comment=commentaire)
         except AppError as exc:
-            return f"❌ {exc.message}"
+            return f"❌ {exc.message}", None
         db.flush()
         broadcast_service.diffuser_machine(db, machine)
-        return f"✅ Arrêt résolu sur {machine.code} : la machine est de nouveau opérationnelle."
+        return (
+            f"✅ Arrêt résolu sur {machine.code} : la machine est de nouveau opérationnelle.",
+            _action_executee(libelle),
+        )
 
 
-@tool
+@tool(response_format="content_and_artifact")
 def lancer_maintenance(
     code_ou_id: str,
     confirmation: bool,
     type_maintenance: str = "PREVENTIVE",
     description: str | None = None,
-) -> str:
+    *,
+    config: RunnableConfig,
+) -> tuple[str, dict | None]:
     """Met une machine en maintenance (PREVENTIVE, CORRECTIVE ou URGENCE).
     ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant confirmation=true."""
-    if not confirmation:
-        return CONFIRMATION_REQUISE
+    libelle = f"lancer une maintenance {type_maintenance} sur {code_ou_id}"
+    if not confirmation_gate.evaluer(
+        config,
+        "lancer_maintenance",
+        {"code_ou_id": code_ou_id, "type_maintenance": type_maintenance},
+        confirmation,
+    ):
+        return _demande_confirmation(libelle)
     if type_maintenance not in TypeMaintenance.__members__:
-        return "Type invalide : utilisez PREVENTIVE, CORRECTIVE ou URGENCE."
+        return "Type invalide : utilisez PREVENTIVE, CORRECTIVE ou URGENCE.", None
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
-            return f"Machine introuvable : {code_ou_id}"
+            return f"Machine introuvable : {code_ou_id}", None
         try:
             simulator_service.demarrer_maintenance(
                 db, machine, type_maintenance=type_maintenance, description=description
             )
         except AppError as exc:
-            return f"❌ {exc.message}"
+            return f"❌ {exc.message}", None
         db.flush()
         broadcast_service.diffuser_machine(db, machine)
-        return f"✅ Maintenance {type_maintenance} démarrée sur {machine.code}."
+        return (
+            f"✅ Maintenance {type_maintenance} démarrée sur {machine.code}.",
+            _action_executee(libelle),
+        )
 
 
-@tool
-def basculer_of_vers_ligne(of_numero_ou_id: str, ligne_id: int, confirmation: bool) -> str:
+@tool(response_format="content_and_artifact")
+def basculer_of_vers_ligne(
+    of_numero_ou_id: str, ligne_id: int, confirmation: bool, *, config: RunnableConfig
+) -> tuple[str, dict | None]:
     """Bascule un OF vers une autre ligne de production : libère la machine actuelle,
     réaffecte l'OF et démarre une machine libre de la ligne cible.
 
@@ -373,18 +427,25 @@ def basculer_of_vers_ligne(of_numero_ou_id: str, ligne_id: int, confirmation: bo
     `choisir_meilleure_ligne` d'abord pour justifier la ligne cible.
     ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant confirmation=true.
     """
-    if not confirmation:
-        return CONFIRMATION_REQUISE
+    libelle = f"basculer l'OF {of_numero_ou_id} vers la ligne id={ligne_id}"
+    if not confirmation_gate.evaluer(
+        config,
+        "basculer_of_vers_ligne",
+        {"of": of_numero_ou_id, "ligne_id": ligne_id},
+        confirmation,
+    ):
+        return _demande_confirmation(libelle)
     with session_scope() as db:
         of = _trouver_of(db, of_numero_ou_id)
         if of is None:
-            return f"OF introuvable : {of_numero_ou_id}"
+            return f"OF introuvable : {of_numero_ou_id}", None
 
         cible = line_scoring_service.machine_libre_sur_ligne(db, ligne_id)
         if cible is None:
             return (
                 f"❌ Aucune machine libre sur la ligne id={ligne_id} : "
-                "impossible de basculer l'OF."
+                "impossible de basculer l'OF.",
+                None,
             )
 
         # Libère la machine qui portait l'OF (si elle existe encore).
@@ -404,7 +465,7 @@ def basculer_of_vers_ligne(of_numero_ou_id: str, ligne_id: int, confirmation: bo
         try:
             simulator_service.demarrer(db, cible, ordre_fabrication_id=of.id)
         except AppError as exc:
-            return f"❌ Bascule interrompue : {exc.message}"
+            return f"❌ Bascule interrompue : {exc.message}", None
         db.flush()
 
         if source is not None:
@@ -412,27 +473,36 @@ def basculer_of_vers_ligne(of_numero_ou_id: str, ligne_id: int, confirmation: bo
         broadcast_service.diffuser_machine(db, cible)
         return (
             f"✅ OF {of.numero} basculé vers la ligne id={ligne_id} : "
-            f"machine {cible.code} démarrée{source_txt}. La production reprend."
+            f"machine {cible.code} démarrée{source_txt}. La production reprend.",
+            _action_executee(libelle),
         )
 
 
-@tool
-def acquitter_alerte(alerte_id: int, confirmation: bool) -> str:
+@tool(response_format="content_and_artifact")
+def acquitter_alerte(
+    alerte_id: int, confirmation: bool, *, config: RunnableConfig
+) -> tuple[str, dict | None]:
     """Acquitte (résout) une alerte du tableau de bord après traitement.
     ACTION : accord explicite de l'opérateur requis avant confirmation=true."""
-    if not confirmation:
-        return CONFIRMATION_REQUISE
+    libelle = f"acquitter l'alerte id={alerte_id}"
+    if not confirmation_gate.evaluer(
+        config, "acquitter_alerte", {"alerte_id": alerte_id}, confirmation
+    ):
+        return _demande_confirmation(libelle)
     with session_scope() as db:
         alerte = db.get(Alert, alerte_id)
         if alerte is None:
-            return f"Alerte introuvable (id={alerte_id})."
+            return f"Alerte introuvable (id={alerte_id}).", None
         if alerte.resolved:
-            return f"L'alerte id={alerte_id} est déjà résolue."
+            return f"L'alerte id={alerte_id} est déjà résolue.", None
         alerte.resolved = True
         alerte.resolved_at = datetime.utcnow()
         db.flush()
         broadcast_service.diffuser({"type": "alert_update", "alert_id": alerte_id})
-        return f"✅ Alerte id={alerte_id} acquittée : « {alerte.message} »"
+        return (
+            f"✅ Alerte id={alerte_id} acquittée : « {alerte.message} »",
+            _action_executee(libelle),
+        )
 
 
 ACTION_TOOLS = [

@@ -6,7 +6,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.enums import StatutLot, StatutOF, TypeArticle, Unite
+from app.models.enums import StatutLot, StatutOF, TypeArticle, TypeMouvement, Unite
 
 
 class _ORM(BaseModel):
@@ -135,6 +135,53 @@ class LotRead(_ORM):
     date_reception: date
     date_peremption: date | None
     statut: StatutLot
+
+
+# --------------------------- Stock (CRUD lots + mouvements) --------------------------- #
+class StockLotCreate(BaseModel):
+    """Réception d'un lot en stock pour une matière première donnée."""
+
+    matiere_premiere_id: int
+    numero_lot: str
+    quantite: Decimal = Field(gt=0)
+    date_reception: date | None = None
+    date_peremption: date | None = None
+    fournisseur_id: int | None = None
+
+
+class LotUpdate(BaseModel):
+    """Mise à jour des métadonnées d'un lot (hors quantité — voir l'ajustement)."""
+
+    statut: StatutLot | None = None
+    date_peremption: date | None = None
+    fournisseur_id: int | None = None
+
+
+class AjustementCreate(BaseModel):
+    """Ajustement d'inventaire : fixe la quantité restante et journalise l'écart."""
+
+    quantite_restante: Decimal = Field(ge=0)
+    commentaire: str | None = None
+
+
+class LotDetailRead(LotRead):
+    """Lot enrichi du code/désignation/unité de sa matière première."""
+
+    code_mp: str
+    designation_mp: str
+    unite: Unite
+
+
+class MouvementRead(_ORM):
+    id: int
+    type_mouvement: TypeMouvement
+    matiere_premiere_id: int
+    lot_matiere_premiere_id: int | None
+    quantite: Decimal
+    reference_type: str | None
+    reference_id: int | None
+    commentaire: str | None
+    date_mouvement: datetime
 
 
 # --------------------------- Ligne de production --------------------------- #

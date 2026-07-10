@@ -47,10 +47,16 @@ class Settings(BaseSettings):
     stt_model: str = "gpt-4o-mini-transcribe"
     tts_model: str = "gpt-4o-mini-tts"
     tts_voice: str = "alloy"
+    # Vision (analyse des photos envoyées à Nova sur WhatsApp)
+    vision_model: str = "gpt-4o-mini"
 
     # Superviseur autonome / simulation
     supervisor_enabled: bool = True
     auto_sim_autostart: bool = False
+    # Nova proactive : les propositions du superviseur partent aussi par WhatsApp
+    # vers ces numéros (CSV) ; l'opérateur répond oui/non depuis son téléphone.
+    supervisor_notify_numbers: Annotated[list[str], NoDecode] = Field(default_factory=list)
+    supervisor_notify_critical_only: bool = True
 
     # Notifications sortantes (envoi du bilan / messages par Nova)
     # E-mail : n'importe quel SMTP (Gmail : smtp.gmail.com + mot de passe d'application).
@@ -62,6 +68,21 @@ class Settings(BaseSettings):
     # WhatsApp : service Baileys local (dossier whatsapp/ du projet, `npm start`
     # puis scan du QR code une seule fois).
     whatsapp_service_url: str = "http://localhost:3001"
+    # WhatsApp entrant : dialoguer avec Nova en lui écrivant sur WhatsApp.
+    # Liste blanche CSV de numéros autorisés (ex. "+21612345678,+21698765432") ;
+    # vide = tout numéro accepté (confort démo).
+    whatsapp_inbound_enabled: bool = True
+    whatsapp_allowed_numbers: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    # Bilan automatique (envoi périodique sans opérateur) : désactivé par défaut,
+    # l'activation en config tient lieu d'accord préalable (pas de confirmation
+    # au moment de l'envoi, contrairement à `envoyer_rapport` en conversation).
+    auto_bilan_enabled: bool = False
+    auto_bilan_canal: Literal["email", "whatsapp"] = "email"
+    auto_bilan_destinataire: str = ""
+    # Heures de déclenchement (HH:MM, séparées par des virgules) — par défaut,
+    # les fins de poste usuelles en 3x8.
+    auto_bilan_heures: str = "06:00,14:00,22:00"
 
     # Base documentaire (RAG) — stockage des PDF sources pour consultation/citations
     documents_pdf_dir: str = "./data/documents"
@@ -77,7 +98,13 @@ class Settings(BaseSettings):
     agent_max_iterations: int = 8
     agent_recursion_limit: int = 25
 
-    @field_validator("cors_origins", "api_keys", mode="before")
+    @field_validator(
+        "cors_origins",
+        "api_keys",
+        "whatsapp_allowed_numbers",
+        "supervisor_notify_numbers",
+        mode="before",
+    )
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):

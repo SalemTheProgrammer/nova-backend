@@ -51,6 +51,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.services.supervisor_service import boucle_superviseur
 
         background_tasks.append(asyncio.create_task(boucle_superviseur()))
+    if settings.auto_bilan_enabled:
+        from app.services.scheduled_report_service import boucle_bilan_auto
+
+        background_tasks.append(asyncio.create_task(boucle_bilan_auto()))
     if settings.auto_sim_autostart:
         from app.services.auto_simulator import auto_simulator
 

@@ -11,6 +11,7 @@ from langchain_core.tools import tool
 
 PAGES: dict[str, str] = {
     "dashboard": "Dashboard",
+    "jumeau": "Jumeau numérique",
     "simulateur": "Simulateur",
     "machines": "Machines",
     "trs": "TRS",
@@ -80,4 +81,6 @@ TOOL_PAGE_MAP: dict[str, str] = {
     "risque_panne_machines": "maintenance",
     "lancer_maintenance": "maintenance",
     "rechercher_documents": "documents",
+    # Piloter le jumeau ouvre automatiquement la page du jumeau numérique.
+    "piloter_jumeau_numerique": "jumeau",
 }

@@ -10,7 +10,12 @@ Règles de détection (déterministes, donc fiables en démo) :
   1. Arrêt machine > SEUIL avec OF actif  → basculer l'OF vers la meilleure ligne
      disponible, ou lancer une maintenance d'urgence si aucune alternative.
   2. Dérive qualité (taux de rebut élevé sur fenêtre courte) → mise en pause pour réglage.
-  3. Stock MP sous le seuil d'alerte → alerte de réapprovisionnement.
+  3. Stock MP sous le seuil d'alerte → alerte de réapprovisionnement (+ message
+     fournisseur pré-rédigé, envoyé seulement si l'opérateur approuve).
+  4. Risque de panne élevé (score `risk_service`) sur une machine qui tourne encore →
+     maintenance préventive, avant que la panne ne survienne réellement.
+  5. OF en cours dont la cadence actuelle ne tiendra pas la date de fin prévue →
+     bascule vers la meilleure ligne alternative, ou alerte de retard sinon.
 """
 from __future__ import annotations
 
@@ -27,6 +32,7 @@ from app.models import (
     AgentProposal,
     Alert,
     DowntimeEvent,
+    LotMatierePremiere,
     Machine,
     MatierePremiere,
     OrdreFabrication,
@@ -35,6 +41,7 @@ from app.models import (
 from app.models.enums import (
     SeveriteAlerte,
     StatutMachine,
+    StatutOF,
     StatutProposition,
     TypeEvenementQualite,
     TypeMaintenance,
@@ -42,6 +49,8 @@ from app.models.enums import (
 from app.services import (
     broadcast_service,
     line_scoring_service,
+    notify_service,
+    risk_service,
     simulator_service,
 )
 from app.services import manufacturing as manufacturing_svc
@@ -272,12 +281,47 @@ def _regle_stock_bas(db: Session, nouvelles: list[AgentProposal]) -> None:
         cle = f"stock_bas:{mp.id}"
         if _deja_traitee(db, cle):
             continue
-        diagnostic = (
-            f"Le stock de {mp.code} ({mp.designation}) est descendu à {dispo} "
-            f"{mp.unite.value}, sous le seuil d'alerte de {mp.seuil_alerte} "
-            f"{mp.unite.value}. Les prochains OF utilisant cette MP risquent d'être "
-            "refusés. Je recommande de créer une alerte de réapprovisionnement."
-        )
+
+        # Fournisseur "connu" = celui du dernier lot reçu pour cette MP (pas de
+        # relation directe MP → fournisseur, seulement au niveau du lot).
+        dernier_lot = db.execute(
+            select(LotMatierePremiere)
+            .where(
+                LotMatierePremiere.matiere_premiere_id == mp.id,
+                LotMatierePremiere.fournisseur_id.is_not(None),
+            )
+            .order_by(LotMatierePremiere.date_creation.desc())
+        ).scalars().first()
+        fournisseur = dernier_lot.fournisseur if dernier_lot is not None else None
+
+        action: dict = {"type": "alerte_reappro", "matiere_premiere_id": mp.id}
+        action_libelle = "Créer l'alerte de réapprovisionnement"
+        if fournisseur is not None and fournisseur.contact:
+            message_fournisseur = (
+                f"Bonjour {fournisseur.nom}, notre stock de {mp.designation} ({mp.code}) "
+                f"est descendu à {dispo} {mp.unite.value}, sous notre seuil d'alerte. "
+                "Pouvez-vous confirmer un réapprovisionnement dans les meilleurs délais ?"
+            )
+            diagnostic = (
+                f"Le stock de {mp.code} ({mp.designation}) est descendu à {dispo} "
+                f"{mp.unite.value}, sous le seuil d'alerte de {mp.seuil_alerte} "
+                f"{mp.unite.value}. Je recommande de créer l'alerte de réapprovisionnement "
+                f"et d'envoyer ce message à {fournisseur.nom} ({fournisseur.contact}), "
+                f"seulement si vous approuvez : « {message_fournisseur} »"
+            )
+            action["fournisseur_nom"] = fournisseur.nom
+            action["fournisseur_contact"] = fournisseur.contact
+            action["message_fournisseur"] = message_fournisseur
+            action_libelle += f" et prévenir {fournisseur.nom}"
+        else:
+            diagnostic = (
+                f"Le stock de {mp.code} ({mp.designation}) est descendu à {dispo} "
+                f"{mp.unite.value}, sous le seuil d'alerte de {mp.seuil_alerte} "
+                f"{mp.unite.value}. Aucun fournisseur connu pour cette MP (pas de lot "
+                "reçu avec fournisseur renseigné) : je recommande de créer l'alerte de "
+                "réapprovisionnement."
+            )
+
         nouvelles.append(
             _proposer(
                 db,
@@ -286,10 +330,150 @@ def _regle_stock_bas(db: Session, nouvelles: list[AgentProposal]) -> None:
                 severite=SeveriteAlerte.WARNING,
                 titre=f"Stock bas : {mp.code} ({dispo} {mp.unite.value})",
                 diagnostic=diagnostic,
-                action_libelle="Créer l'alerte de réapprovisionnement",
-                action={"type": "alerte_reappro", "matiere_premiere_id": mp.id},
+                action_libelle=action_libelle,
+                action=action,
             )
         )
+
+
+def _regle_risque_panne_eleve(db: Session, nouvelles: list[AgentProposal]) -> None:
+    risques = risk_service.analyser_risques(db)
+    if not risques:
+        return
+
+    # Une machine déjà à l'arrêt est couverte par `_regle_arret_bloquant` (bascule
+    # d'OF ou maintenance d'urgence) — pas besoin d'une proposition redondante ici.
+    machines_en_arret = {
+        d.machine_id
+        for d in db.execute(select(DowntimeEvent).where(DowntimeEvent.end_time.is_(None))).scalars()
+    }
+
+    for r in risques:
+        if r.niveau != "eleve":
+            continue
+        machine = db.get(Machine, r.machine_id)
+        if machine is None or machine.statut == StatutMachine.MAINTENANCE:
+            continue
+        if machine.id in machines_en_arret:
+            continue
+        cle = f"risque_panne:{machine.id}:{datetime.utcnow():%Y%m%d}"
+        if _deja_traitee(db, cle):
+            continue
+
+        maint_txt = (
+            f"dernière maintenance il y a {r.jours_depuis_maintenance} j"
+            if r.jours_depuis_maintenance is not None
+            else "jamais maintenue"
+        )
+        diagnostic = (
+            f"{machine.code} affiche un risque de panne élevé ({r.score * 100:.0f}/100) : "
+            f"{r.nb_pannes_7j} panne(s) sur 7 jours, {maint_txt}. Je recommande de "
+            "planifier une maintenance préventive avant qu'une panne réelle ne bloque "
+            "un OF en cours."
+        )
+        nouvelles.append(
+            _proposer(
+                db,
+                cle=cle,
+                type_="maintenance_preventive",
+                severite=SeveriteAlerte.WARNING,
+                titre=f"Risque de panne élevé sur {machine.code} ({r.score * 100:.0f}/100)",
+                diagnostic=diagnostic,
+                action_libelle=f"Planifier une maintenance préventive sur {machine.code}",
+                action={"type": "maintenance_preventive", "machine_id": machine.id},
+                machine_id=machine.id,
+            )
+        )
+
+
+def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
+    ofs = db.execute(
+        select(OrdreFabrication).where(
+            OrdreFabrication.statut == StatutOF.EN_COURS,
+            OrdreFabrication.date_fin_prevue.is_not(None),
+        )
+    ).scalars().all()
+
+    for of in ofs:
+        # Projection fiable seulement si une machine tourne dessus MAINTENANT
+        # (même logique que `simuler_scenario_panne` : cycle actuel/cible).
+        machine = db.execute(
+            select(Machine).where(Machine.ordre_fabrication_id == of.id)
+        ).scalars().first()
+        if machine is None or machine.statut != StatutMachine.MARCHE:
+            continue
+        cycle = machine.temps_cycle_actuel_s or machine.temps_cycle_cible_s
+        if not cycle or cycle <= 0:
+            continue
+
+        restant = max(
+            0.0,
+            float(of.quantite_planifiee) - float(of.quantite_bonne) - float(of.quantite_rejetee),
+        )
+        if restant <= 0:
+            continue
+
+        heures_restantes = restant * float(cycle) / 3600
+        fin_estimee = datetime.utcnow() + timedelta(hours=heures_restantes)
+        if fin_estimee.date() <= of.date_fin_prevue:
+            continue  # au rythme actuel, l'échéance reste tenable
+
+        cle = f"retard_of:{of.id}:{datetime.utcnow():%Y%m%d}"
+        if _deja_traitee(db, cle):
+            continue
+
+        retard_j = (fin_estimee.date() - of.date_fin_prevue).days
+        alternative = line_scoring_service.meilleure_ligne_disponible(
+            db, exclure_ligne_id=machine.ligne_production_id
+        )
+        if alternative is not None:
+            diagnostic = (
+                f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
+                f"{fin_estimee:%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
+                f"({of.date_fin_prevue.isoformat()}). La ligne {alternative.code} est la "
+                f"meilleure alternative : score {alternative.score * 100:.0f}/100 "
+                f"({alternative.raison})."
+            )
+            nouvelles.append(
+                _proposer(
+                    db,
+                    cle=cle,
+                    type_="basculer_of",
+                    severite=SeveriteAlerte.WARNING,
+                    titre=f"OF {of.numero} en retard prévisionnel ({retard_j} j)",
+                    diagnostic=diagnostic,
+                    action_libelle=f"Basculer l'OF vers la ligne {alternative.code}",
+                    action={
+                        "type": "basculer_of",
+                        "of_id": of.id,
+                        "ligne_id": alternative.ligne_id,
+                        "machine_source_id": machine.id,
+                    },
+                    machine_id=machine.id,
+                    ordre_fabrication_id=of.id,
+                )
+            )
+        else:
+            diagnostic = (
+                f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
+                f"{fin_estimee:%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
+                f"({of.date_fin_prevue.isoformat()}). Aucune ligne alternative n'a de "
+                "machine libre : je recommande de signaler le retard dès maintenant."
+            )
+            nouvelles.append(
+                _proposer(
+                    db,
+                    cle=cle,
+                    type_="alerte_retard",
+                    severite=SeveriteAlerte.WARNING,
+                    titre=f"OF {of.numero} en retard prévisionnel ({retard_j} j)",
+                    diagnostic=diagnostic,
+                    action_libelle="Créer l'alerte de retard",
+                    action={"type": "alerte_retard", "of_id": of.id},
+                    machine_id=machine.id,
+                    ordre_fabrication_id=of.id,
+                )
+            )
 
 
 def analyser(db: Session) -> list[AgentProposal]:
@@ -298,6 +482,8 @@ def analyser(db: Session) -> list[AgentProposal]:
     _regle_arret_bloquant(db, nouvelles)
     _regle_derive_qualite(db, nouvelles)
     _regle_stock_bas(db, nouvelles)
+    _regle_risque_panne_eleve(db, nouvelles)
+    _regle_retard_of(db, nouvelles)
     return nouvelles
 
 
@@ -353,6 +539,20 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
         broadcast_service.diffuser_machine(db, machine)
         return f"{machine.code} mise en pause pour réglage qualité."
 
+    if type_ == "maintenance_preventive":
+        machine = db.get(Machine, action["machine_id"])
+        if machine is None:
+            raise AppError("Machine introuvable.")
+        simulator_service.demarrer_maintenance(
+            db,
+            machine,
+            type_maintenance=TypeMaintenance.PREVENTIVE.value,
+            description="Maintenance préventive déclenchée par le superviseur Nova (risque de panne élevé)",
+        )
+        db.flush()
+        broadcast_service.diffuser_machine(db, machine)
+        return f"Maintenance préventive lancée sur {machine.code}."
+
     if type_ == "alerte_reappro":
         mp = db.get(MatierePremiere, action["matiere_premiere_id"])
         if mp is None:
@@ -368,7 +568,39 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
         )
         db.add(alerte)
         db.flush()
-        return f"Alerte de réapprovisionnement créée pour {mp.code}."
+        resultat = f"Alerte de réapprovisionnement créée pour {mp.code}."
+
+        contact = action.get("fournisseur_contact")
+        message = action.get("message_fournisseur")
+        if contact and message:
+            canal = "email" if notify_service.EMAIL_RE.fullmatch(contact.strip()) else "whatsapp"
+            try:
+                if canal == "email":
+                    envoi = notify_service.envoyer_email(
+                        contact, f"Réapprovisionnement {mp.code}", message
+                    )
+                else:
+                    envoi = notify_service.envoyer_whatsapp(contact, message)
+                resultat += f" {envoi}"
+            except AppError as exc:
+                resultat += f" Message fournisseur non envoyé : {exc.message}"
+        return resultat
+
+    if type_ == "alerte_retard":
+        of = db.get(OrdreFabrication, action["of_id"])
+        if of is None:
+            raise AppError("OF introuvable.")
+        alerte = Alert(
+            severity=SeveriteAlerte.WARNING,
+            type="RETARD_OF",
+            message=(
+                f"OF {of.numero} en retard prévisionnel par rapport à l'échéance du "
+                f"{of.date_fin_prevue.isoformat() if of.date_fin_prevue else '—'}."
+            ),
+        )
+        db.add(alerte)
+        db.flush()
+        return f"Alerte de retard créée pour l'OF {of.numero}."
 
     raise AppError(f"Action inconnue : {type_!r}")
 
@@ -420,11 +652,16 @@ async def boucle_superviseur(intervalle_s: float = INTERVALLE_BOUCLE_S) -> None:
     logger.info("superviseur_demarre", intervalle_s=intervalle_s)
     from app.services.websocket_manager import manager
 
+    from app.services import proactive_service
+
     while True:
         try:
             nouvelles = await asyncio.to_thread(_tick_superviseur)
             for proposition in nouvelles:
                 await manager.broadcast({"type": "agent_proposal", "proposal": proposition})
+                # Nova proactive : la proposition part aussi sur WhatsApp
+                # (SUPERVISOR_NOTIFY_NUMBERS) — l'opérateur répond oui/non.
+                await asyncio.to_thread(proactive_service.notifier_proposition, proposition)
         except asyncio.CancelledError:
             logger.info("superviseur_arrete")
             raise
