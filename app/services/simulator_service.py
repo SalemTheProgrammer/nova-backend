@@ -18,7 +18,16 @@ def _verifier(condition: bool, message: str) -> None:
 
 
 def demarrer(db: Session, machine: Machine, *, ordre_fabrication_id: int | None) -> None:
-    _verifier(machine.statut != StatutMachine.MARCHE, f"{machine.code} est déjà en marche.")
+    # Une machine MARCHE sans OF est « libre » (idle) : seule la présence d'un OF
+    # déjà attaché signale une vraie occupation. Voir `line_scoring_service.
+    # machine_libre_sur_ligne` et `auto_simulator._amorcer`, qui partagent cette
+    # même définition de « libre ».
+    _verifier(
+        machine.ordre_fabrication_id is None,
+        f"{machine.code} est déjà en marche avec un OF en cours.",
+    )
+    if ordre_fabrication_id is None:
+        _verifier(machine.statut != StatutMachine.MARCHE, f"{machine.code} est déjà en marche.")
     event_service.enregistrer_evenement(
         db,
         machine=machine,
