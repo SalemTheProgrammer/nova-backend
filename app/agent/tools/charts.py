@@ -10,9 +10,22 @@ from __future__ import annotations
 
 from langchain_core.tools import tool
 
+from sqlalchemy import select
+
 from app.db.session import session_scope
-from app.models import LigneProduction, Machine
+from app.models import LigneProduction, Machine, OrdreFabrication
 from app.services import chart_service, trs_service
+
+
+def _trouver_of(db, numero_ou_id: str) -> OrdreFabrication | None:
+    of: OrdreFabrication | None = None
+    if numero_ou_id.isdigit():
+        of = db.get(OrdreFabrication, int(numero_ou_id))
+    if of is None:
+        of = db.execute(
+            select(OrdreFabrication).where(OrdreFabrication.numero == numero_ou_id)
+        ).scalars().first()
+    return of
 
 
 @tool(response_format="content_and_artifact")
@@ -20,6 +33,7 @@ def generer_graphique(
     dataset: str,
     scope: str = "usine",
     id: int | None = None,
+    of_numero: str | None = None,
     periode_heures: int = 8,
     type_graphique: str | None = None,
 ) -> tuple[str, dict | None]:
@@ -36,7 +50,10 @@ def generer_graphique(
     - trs_machines : TRS courant de chaque machine (comparaison) — barres.
     - stock_matieres : stock restant par matière première — barres.
 
-    `scope` : "usine" (défaut), "ligne" ou "machine" — avec `id` pour ligne/machine.
+    `scope` : "usine" (défaut), "ligne", "machine" ou "of" — avec `id` pour
+    ligne/machine. Pour "of", utilisez `of_numero` (ex. 'OF-2026-00039') plutôt
+    que `id` : c'est le seul moyen fiable de cibler un OF précis, l'agent n'a
+    normalement pas son id numérique interne sous la main.
     `periode_heures` : fenêtre d'analyse (1 à 48, défaut 8).
     `type_graphique` : "line", "bar", "area" ou "pie" pour surcharger le type par
     défaut du dataset (ex. l'opérateur demande explicitement un camembert).
@@ -45,6 +62,14 @@ def generer_graphique(
     ne décris pas les points un par un, l'opérateur a le visuel sous les yeux.
     """
     with session_scope() as db:
+        if scope == "of":
+            reference = of_numero or (str(id) if id is not None else None)
+            if reference is None:
+                return "scope 'of' nécessite of_numero (ex. 'OF-2026-00039').", None
+            of = _trouver_of(db, reference)
+            if of is None:
+                return f"OF introuvable : {reference}.", None
+            id = of.id
         try:
             spec = chart_service.construire_graphique(
                 db,
@@ -71,6 +96,7 @@ def generer_jauge(
     indicateur: str = "trs",
     scope: str = "usine",
     id: int | None = None,
+    of_numero: str | None = None,
     periode_heures: int = 8,
 ) -> tuple[str, dict | None]:
     """Affiche une JAUGE (cadran semi-circulaire, comme le dashboard) pour un
@@ -80,7 +106,9 @@ def generer_jauge(
 
     `indicateur` : "trs" (défaut), "trg", "tre", "qualite" (taux qualité TQ),
     "performance" (TP) ou "disponibilite" (DO).
-    `scope` : "usine" (défaut), "ligne" ou "machine" — avec `id` pour ligne/machine.
+    `scope` : "usine" (défaut), "ligne", "machine" ou "of" — avec `id` pour
+    ligne/machine. Pour "of", utilisez `of_numero` (ex. 'OF-2026-00039') plutôt
+    que `id`.
     `periode_heures` : fenêtre d'analyse (1 à 48, défaut 8).
 
     Sur WhatsApp la jauge part en image dans la conversation ; commente-la en
@@ -91,7 +119,16 @@ def generer_jauge(
         return f"Indicateur invalide : {indicateur!r}. Choix : {', '.join(indicateurs)}.", None
     periode_heures = max(1, min(48, periode_heures))
     with session_scope() as db:
-        if scope == "machine" and id is not None:
+        if scope == "of":
+            reference = of_numero or (str(id) if id is not None else None)
+            if reference is None:
+                return "scope 'of' nécessite of_numero (ex. 'OF-2026-00039').", None
+            of = _trouver_of(db, reference)
+            if of is None:
+                return f"OF introuvable : {reference}.", None
+            resultat = trs_service.calculer_trs_ordre(db, of)
+            libelle = f"OF {of.numero}"
+        elif scope == "machine" and id is not None:
             machine = db.get(Machine, id)
             if machine is None:
                 return f"Machine introuvable (id={id}).", None

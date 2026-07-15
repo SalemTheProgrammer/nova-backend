@@ -513,7 +513,10 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
         of.ligne_production_id = action["ligne_id"]
         db.flush()
         simulator_service.demarrer(db, cible, ordre_fabrication_id=of.id)
-        db.flush()
+        # Commit avant diffusion : voir la même remarque dans agent/tools/actions.py —
+        # sinon la relecture REST déclenchée côté frontend par le message WS peut
+        # arriver avant la validation de la transaction et rater la mise à jour.
+        db.commit()
         if source is not None:
             broadcast_service.diffuser_machine(db, source)
         broadcast_service.diffuser_machine(db, cible)
@@ -529,7 +532,7 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
             type_maintenance=TypeMaintenance.URGENCE.value,
             description="Maintenance d'urgence déclenchée par le superviseur Nova",
         )
-        db.flush()
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         return f"Maintenance d'urgence lancée sur {machine.code}."
 
@@ -538,7 +541,7 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
         if machine is None:
             raise AppError("Machine introuvable.")
         simulator_service.mettre_en_pause(db, machine)
-        db.flush()
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         return f"{machine.code} mise en pause pour réglage qualité."
 
@@ -552,7 +555,7 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
             type_maintenance=TypeMaintenance.PREVENTIVE.value,
             description="Maintenance préventive déclenchée par le superviseur Nova (risque de panne élevé)",
         )
-        db.flush()
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         return f"Maintenance préventive lancée sur {machine.code}."
 
@@ -630,7 +633,7 @@ def decider(db: Session, proposition_id: int, *, approuver: bool) -> AgentPropos
         else:
             proposition.statut = StatutProposition.EXECUTEE
             proposition.resultat = resume
-    db.flush()
+    db.commit()
     db.refresh(proposition)
     broadcast_service.diffuser(
         {"type": "agent_proposal_update", "proposal": serialiser_proposition(proposition)}

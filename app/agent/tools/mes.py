@@ -19,6 +19,17 @@ _LIBELLE_PERTE = {
 }
 
 
+def _trouver_of(db, numero_ou_id: str) -> OrdreFabrication | None:
+    of: OrdreFabrication | None = None
+    if numero_ou_id.isdigit():
+        of = db.get(OrdreFabrication, int(numero_ou_id))
+    if of is None:
+        of = db.execute(
+            select(OrdreFabrication).where(OrdreFabrication.numero == numero_ou_id)
+        ).scalars().first()
+    return of
+
+
 @tool(response_format="content_and_artifact")
 def etat_machine(code_ou_id: str) -> tuple[str, dict | None]:
     """Donne l'état courant d'une machine (statut, OF actif, production, TRS/TQ/TP/DO).
@@ -72,19 +83,26 @@ def etat_machine(code_ou_id: str) -> tuple[str, dict | None]:
 
 
 @tool(response_format="content_and_artifact")
-def resume_trs(scope: str, id: int) -> tuple[str, dict | None]:
+def resume_trs(scope: str, id: int | None = None, of_numero: str | None = None) -> tuple[str, dict | None]:
     """Résumé TRS/TRG/TRE pour une machine, une ligne ou un OF.
 
-    `scope` doit valoir 'machine', 'ligne' ou 'of'. `id` est l'id correspondant.
+    `scope` doit valoir 'machine', 'ligne' ou 'of'. Pour 'machine'/'ligne', `id`
+    est l'id numérique correspondant. Pour 'of', préférez `of_numero` (numéro
+    lisible, ex. 'OF-2026-00039' — accepte aussi un id numérique en texte) ;
+    `id` reste accepté en repli si vous connaissez déjà l'id numérique de l'OF.
     """
     with session_scope() as db:
         if scope == "machine":
+            if id is None:
+                return "scope 'machine' nécessite id.", None
             machine = db.get(Machine, id)
             if machine is None:
                 return f"Machine introuvable (id={id}).", None
             r = trs_service.calculer_trs_machine(db, machine)
             libelle = machine.code
         elif scope == "ligne":
+            if id is None:
+                return "scope 'ligne' nécessite id.", None
             machines = list(
                 db.execute(select(Machine).where(Machine.ligne_production_id == id)).scalars()
             )
@@ -94,9 +112,12 @@ def resume_trs(scope: str, id: int) -> tuple[str, dict | None]:
             r = resultat
             libelle = f"ligne id={id}"
         elif scope == "of":
-            of = db.get(OrdreFabrication, id)
+            reference = of_numero or (str(id) if id is not None else None)
+            if reference is None:
+                return "scope 'of' nécessite of_numero (ex. 'OF-2026-00039').", None
+            of = _trouver_of(db, reference)
             if of is None:
-                return f"OF introuvable (id={id}).", None
+                return f"OF introuvable : {reference}.", None
             r = trs_service.calculer_trs_ordre(db, of)
             libelle = of.numero
         else:

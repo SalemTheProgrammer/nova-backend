@@ -27,6 +27,7 @@ from app.models import (
     LotMatierePremiere,
     Machine,
     MatierePremiere,
+    OrdreFabrication,
     QualityEvent,
 )
 from app.models.enums import StatutLot, TypeEvenementQualite
@@ -62,6 +63,9 @@ def _libelle_scope(db: Session, scope: str, id: int | None) -> str:
     if scope == "ligne" and id is not None:
         l = db.get(LigneProduction, id)
         return l.designation if l else f"ligne {id}"
+    if scope == "of" and id is not None:
+        of = db.get(OrdreFabrication, id)
+        return f"OF {of.numero}" if of else f"OF id={id}"
     return "usine"
 
 
@@ -78,6 +82,17 @@ def _heures(periode_heures: int) -> list[tuple[datetime, datetime, str]]:
 def _dataset_trs_horaire(
     db: Session, scope: str, id: int | None, periode_heures: int
 ) -> tuple[str, list[dict]]:
+    if scope == "of" and id is not None:
+        of = db.get(OrdreFabrication, id)
+        if of is None:
+            raise ValueError(f"OF introuvable (id={id}).")
+        points = [
+            {"x": label, "y": round(float(trs_service.calculer_trs_ordre_fenetre(
+                db, of, depuis=debut, jusqua=fin
+            ).trs) * 100, 1)}
+            for debut, fin, label in _heures(periode_heures)
+        ]
+        return f"TRS horaire — OF {of.numero}", [{"name": "TRS %", "data": points}]
     machines = _machines_du_scope(db, scope, id)
     points = []
     for debut, fin, label in _heures(periode_heures):
@@ -97,17 +112,29 @@ def _dataset_trs_horaire(
 def _dataset_production_horaire(
     db: Session, scope: str, id: int | None, periode_heures: int
 ) -> tuple[str, list[dict]]:
-    machines = _machines_du_scope(db, scope, id)
-    machine_ids = [m.id for m in machines]
     depuis = datetime.utcnow() - timedelta(hours=periode_heures)
-    events = list(
-        db.execute(
-            select(QualityEvent).where(
-                QualityEvent.machine_id.in_(machine_ids),
-                QualityEvent.created_at >= depuis,
-            )
-        ).scalars()
-    )
+    if scope == "of" and id is not None:
+        if db.get(OrdreFabrication, id) is None:
+            raise ValueError(f"OF introuvable (id={id}).")
+        events = list(
+            db.execute(
+                select(QualityEvent).where(
+                    QualityEvent.ordre_fabrication_id == id,
+                    QualityEvent.created_at >= depuis,
+                )
+            ).scalars()
+        )
+    else:
+        machines = _machines_du_scope(db, scope, id)
+        machine_ids = [m.id for m in machines]
+        events = list(
+            db.execute(
+                select(QualityEvent).where(
+                    QualityEvent.machine_id.in_(machine_ids),
+                    QualityEvent.created_at >= depuis,
+                )
+            ).scalars()
+        )
     bonnes: list[dict] = []
     rebuts: list[dict] = []
     for debut, fin, label in _heures(periode_heures):
@@ -138,18 +165,30 @@ def _dataset_production_horaire(
 def _dataset_pareto_arrets(
     db: Session, scope: str, id: int | None, periode_heures: int
 ) -> tuple[str, list[dict]]:
-    machines = _machines_du_scope(db, scope, id)
-    machine_ids = [m.id for m in machines]
     jusqua = datetime.utcnow()
     depuis = jusqua - timedelta(hours=periode_heures)
-    arrets = list(
-        db.execute(
-            select(DowntimeEvent).where(
-                DowntimeEvent.machine_id.in_(machine_ids),
-                DowntimeEvent.start_time < jusqua,
-            )
-        ).scalars()
-    )
+    if scope == "of" and id is not None:
+        if db.get(OrdreFabrication, id) is None:
+            raise ValueError(f"OF introuvable (id={id}).")
+        arrets = list(
+            db.execute(
+                select(DowntimeEvent).where(
+                    DowntimeEvent.ordre_fabrication_id == id,
+                    DowntimeEvent.start_time < jusqua,
+                )
+            ).scalars()
+        )
+    else:
+        machines = _machines_du_scope(db, scope, id)
+        machine_ids = [m.id for m in machines]
+        arrets = list(
+            db.execute(
+                select(DowntimeEvent).where(
+                    DowntimeEvent.machine_id.in_(machine_ids),
+                    DowntimeEvent.start_time < jusqua,
+                )
+            ).scalars()
+        )
     minutes_par_cause: dict[str, float] = {}
     for a in arrets:
         debut = max(a.start_time, depuis)
@@ -175,18 +214,31 @@ def _dataset_pareto_arrets(
 def _dataset_rebuts_par_cause(
     db: Session, scope: str, id: int | None, periode_heures: int
 ) -> tuple[str, list[dict]]:
-    machines = _machines_du_scope(db, scope, id)
-    machine_ids = [m.id for m in machines]
     depuis = datetime.utcnow() - timedelta(hours=periode_heures)
-    events = list(
-        db.execute(
-            select(QualityEvent).where(
-                QualityEvent.machine_id.in_(machine_ids),
-                QualityEvent.type == TypeEvenementQualite.REBUT,
-                QualityEvent.created_at >= depuis,
-            )
-        ).scalars()
-    )
+    if scope == "of" and id is not None:
+        if db.get(OrdreFabrication, id) is None:
+            raise ValueError(f"OF introuvable (id={id}).")
+        events = list(
+            db.execute(
+                select(QualityEvent).where(
+                    QualityEvent.ordre_fabrication_id == id,
+                    QualityEvent.type == TypeEvenementQualite.REBUT,
+                    QualityEvent.created_at >= depuis,
+                )
+            ).scalars()
+        )
+    else:
+        machines = _machines_du_scope(db, scope, id)
+        machine_ids = [m.id for m in machines]
+        events = list(
+            db.execute(
+                select(QualityEvent).where(
+                    QualityEvent.machine_id.in_(machine_ids),
+                    QualityEvent.type == TypeEvenementQualite.REBUT,
+                    QualityEvent.created_at >= depuis,
+                )
+            ).scalars()
+        )
     par_cause: dict[str, int] = {}
     for e in events:
         cause = (e.cause.value if e.cause else "AUTRE").replace("_", " ").capitalize()

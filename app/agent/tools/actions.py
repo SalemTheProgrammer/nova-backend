@@ -417,7 +417,11 @@ def demarrer_machine(
             simulator_service.demarrer(db, machine, ordre_fabrication_id=ordre_fabrication_id)
         except AppError as exc:
             return f"❌ {exc.message}", None
-        db.flush()
+        # Commit avant diffusion : le frontend réagit au message WS par une
+        # relecture REST immédiate (useTwinBinding.ts) — si elle arrive avant
+        # que la transaction soit validée, elle lit encore l'ancien état et
+        # l'affichage ne se met à jour qu'au polling suivant (jusqu'à 15 s plus tard).
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         of_txt = f" avec l'OF id={ordre_fabrication_id}" if ordre_fabrication_id else ""
         return f"✅ Machine {machine.code} démarrée{of_txt}.", _action_executee(libelle)
@@ -525,7 +529,10 @@ def lancer_of_maintenant(
             )
         except AppError as exc:
             return f"❌ {exc.message}", None
-        db.flush()
+        # Commit avant diffusion (voir demarrer_machine) : sinon la relecture REST
+        # déclenchée côté frontend par le message WS peut arriver avant la
+        # validation de la transaction et rater la mise à jour.
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         broadcast_service.diffuser(
             {"type": "ordres_update", "raison": "demarrage", "numero": of.numero}
@@ -577,7 +584,7 @@ def mettre_of_en_file(
             line_queue_service.mettre_en_file(db, of, ligne.id)
         except AppError as exc:
             return f"❌ {exc.message}", None
-        db.flush()
+        db.commit()
         broadcast_service.diffuser(
             {"type": "ordres_update", "raison": "mise_en_file", "numero": of.numero}
         )
@@ -615,9 +622,73 @@ def arreter_machine(
             simulator_service.arreter(db, machine)
         except AppError as exc:
             return f"❌ {exc.message}", None
-        db.flush()
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         return f"✅ Machine {machine.code} arrêtée.", _action_executee(libelle)
+
+
+@tool(response_format="content_and_artifact")
+def arreter_ligne(
+    ligne_code_ou_id: str, confirmation: bool, *, config: RunnableConfig
+) -> tuple[str, dict | None]:
+    """Arrête TOUTES les machines actives d'une ligne de production (commande SCADA).
+
+    À utiliser pour « arrête la ligne X » / « stoppe toute la ligne », par
+    opposition à `arreter_machine` qui ne touche qu'une seule machine.
+    ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant
+    confirmation=true.
+    """
+    libelle = f"arrêter toute la ligne {ligne_code_ou_id}"
+    if not confirmation_gate.evaluer(
+        config, "arreter_ligne", {"ligne_code_ou_id": ligne_code_ou_id}, confirmation
+    ):
+        return _demande_confirmation(libelle)
+    with session_scope() as db:
+        ligne: LigneProduction | None = None
+        if ligne_code_ou_id.isdigit():
+            ligne = db.get(LigneProduction, int(ligne_code_ou_id))
+        if ligne is None:
+            ligne = db.execute(
+                select(LigneProduction).where(LigneProduction.code == ligne_code_ou_id)
+            ).scalars().first()
+        if ligne is None:
+            return f"Ligne introuvable : {ligne_code_ou_id}", None
+
+        machines = list(
+            db.execute(
+                select(Machine).where(
+                    Machine.ligne_production_id == ligne.id, Machine.actif.is_(True)
+                )
+            ).scalars()
+        )
+        if not machines:
+            return f"Aucune machine active sur la ligne {ligne.code}.", None
+
+        arretees: list[Machine] = []
+        deja_arretees: list[str] = []
+        for machine in machines:
+            if machine.statut == StatutMachine.ARRET:
+                deja_arretees.append(machine.code)
+                continue
+            try:
+                simulator_service.arreter(db, machine)
+            except AppError:
+                continue
+            arretees.append(machine)
+
+        db.commit()
+        for machine in arretees:
+            broadcast_service.diffuser_machine(db, machine)
+
+        if not arretees:
+            return (
+                f"Aucune machine à arrêter sur {ligne.code} (déjà toutes à l'arrêt).",
+                None,
+            )
+        resume = f"✅ Ligne {ligne.code} arrêtée : {', '.join(m.code for m in arretees)}."
+        if deja_arretees:
+            resume += f" Déjà à l'arrêt : {', '.join(deja_arretees)}."
+        return resume, _action_executee(libelle)
 
 
 @tool(response_format="content_and_artifact")
@@ -646,7 +717,7 @@ def resoudre_arret_machine(
             simulator_service.resoudre_arret(db, machine, comment=commentaire)
         except AppError as exc:
             return f"❌ {exc.message}", None
-        db.flush()
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         return (
             f"✅ Arrêt résolu sur {machine.code} : la machine est de nouveau opérationnelle.",
@@ -685,7 +756,7 @@ def lancer_maintenance(
             )
         except AppError as exc:
             return f"❌ {exc.message}", None
-        db.flush()
+        db.commit()
         broadcast_service.diffuser_machine(db, machine)
         return (
             f"✅ Maintenance {type_maintenance} démarrée sur {machine.code}.",
@@ -753,7 +824,7 @@ def basculer_of_vers_ligne(
             simulator_service.demarrer(db, cible, ordre_fabrication_id=of.id)
         except AppError as exc:
             return f"❌ Bascule interrompue : {exc.message}", None
-        db.flush()
+        db.commit()
 
         if source is not None:
             broadcast_service.diffuser_machine(db, source)
@@ -784,7 +855,7 @@ def acquitter_alerte(
             return f"L'alerte id={alerte_id} est déjà résolue.", None
         alerte.resolved = True
         alerte.resolved_at = datetime.utcnow()
-        db.flush()
+        db.commit()
         broadcast_service.diffuser({"type": "alert_update", "alert_id": alerte_id})
         return (
             f"✅ Alerte id={alerte_id} acquittée : « {alerte.message} »",
@@ -802,6 +873,7 @@ ACTION_TOOLS = [
     lancer_of_maintenant,
     mettre_of_en_file,
     arreter_machine,
+    arreter_ligne,
     resoudre_arret_machine,
     lancer_maintenance,
     basculer_of_vers_ligne,

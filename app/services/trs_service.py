@@ -209,6 +209,37 @@ def calculer_trs_ligne(
     )
 
 
+def calculer_trs_ordre_fenetre(
+    db: Session, of: OrdreFabrication, *, depuis: datetime, jusqua: datetime
+) -> TRSResult:
+    """TRS d'un OF restreint à une fenêtre de temps (pour les courbes horaires)."""
+    downtimes = list(
+        db.execute(
+            select(DowntimeEvent).where(
+                DowntimeEvent.ordre_fabrication_id == of.id, DowntimeEvent.start_time < jusqua
+            )
+        ).scalars()
+    )
+    quality_events = list(
+        db.execute(
+            select(QualityEvent).where(
+                QualityEvent.ordre_fabrication_id == of.id,
+                QualityEvent.created_at >= depuis,
+                QualityEvent.created_at <= jusqua,
+            )
+        ).scalars()
+    )
+    return _calculer(
+        depuis=depuis,
+        jusqua=jusqua,
+        downtimes=downtimes,
+        quality_events=quality_events,
+        cycle_cible_s=of.article.temps_cycle_cible_s or Decimal("0"),
+        taux_charge=of.ligne_production.taux_charge if of.ligne_production else Decimal("1.0"),
+        taux_engagement=of.ligne_production.taux_engagement if of.ligne_production else Decimal("1.0"),
+    )
+
+
 def calculer_trs_ordre(db: Session, of: OrdreFabrication) -> TRSResult:
     """TRS pour un OF donné, tous événements liés à cet OF (indépendamment de la machine)."""
     jusqua = of.date_fin_reelle or datetime.utcnow()
