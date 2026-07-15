@@ -94,6 +94,16 @@ class MatiereConsommeeResume:
 
 
 @dataclass
+class PointOEE:
+    label: str
+    horodatage: datetime
+    disponibilite: Decimal
+    performance: Decimal
+    qualite: Decimal
+    trs: Decimal
+
+
+@dataclass
 class DashboardResume:
     trs_global: Decimal
     disponibilite: Decimal
@@ -173,9 +183,17 @@ def construire_resume(
     quantite_rejetee = sum((o.quantite_rejetee for o in ordres_actifs), Decimal("0"))
     production_reelle = quantite_bonne + quantite_rejetee
 
-    # OF "actif principal" pour l'en-tête : le plus récemment démarré du périmètre.
+    # The header must follow an OF that is actually mounted on a machine. An
+    # EN_COURS order with no assigned machine is planned work, not live output.
+    ordres_montes = {
+        machine.ordre_fabrication_id
+        for machine in machines
+        if machine.ordre_fabrication_id is not None
+    }
     of_actif_model = max(
-        ordres_actifs, key=lambda o: o.date_debut_reelle or datetime.min, default=None
+        (ordre for ordre in ordres_actifs if ordre.id in ordres_montes),
+        key=lambda o: o.date_debut_reelle or datetime.min,
+        default=None,
     )
 
     downtime_stmt = select(DowntimeEvent).where(DowntimeEvent.start_time >= depuis)
@@ -329,6 +347,55 @@ def construire_resume(
         micro_arrets_nombre=micro_nombre,
         matieres_consommees=matieres_consommees,
     )
+
+
+def construire_historique_oee(
+    db: Session, *, ligne_id: int | None = None, periode: str = "week"
+) -> list[PointOEE]:
+    """Historique du TRS pour le graphe « OEE Metrics » : un point par bucket
+    (heure/jour), recalculé à la lecture comme le reste des KPI — pas de table
+    de snapshots, la vérité reste les événements machine.
+    """
+    machines_stmt = select(Machine).where(Machine.actif.is_(True))
+    if ligne_id is not None:
+        machines_stmt = machines_stmt.where(Machine.ligne_production_id == ligne_id)
+    machines = list(db.execute(machines_stmt).scalars())
+
+    jusqua = datetime.utcnow()
+    if periode == "day":
+        bucket = timedelta(hours=1)
+        n_buckets = jusqua.hour + 1
+        origine = jusqua.replace(hour=0, minute=0, second=0, microsecond=0)
+        fmt = "%Hh"
+    elif periode == "month":
+        bucket = timedelta(days=1)
+        n_buckets = 30
+        origine = (jusqua - timedelta(days=29)).replace(hour=0, minute=0, second=0, microsecond=0)
+        fmt = "%d/%m"
+    else:
+        bucket = timedelta(days=1)
+        n_buckets = 7
+        origine = (jusqua - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
+        fmt = "%d/%m"
+
+    points: list[PointOEE] = []
+    for i in range(n_buckets):
+        debut = origine + bucket * i
+        fin = min(debut + bucket, jusqua)
+        if fin <= debut:
+            continue
+        resultat = trs_service.calculer_trs_ligne(db, machines, depuis=debut, jusqua=fin)
+        points.append(
+            PointOEE(
+                label=debut.strftime(fmt),
+                horodatage=fin,
+                disponibilite=resultat.do if resultat else Decimal("0"),
+                performance=resultat.tp if resultat else Decimal("0"),
+                qualite=resultat.tq if resultat else Decimal("0"),
+                trs=resultat.trs if resultat else Decimal("0"),
+            )
+        )
+    return points
 
 
 def _activite_recente(

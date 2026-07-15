@@ -19,15 +19,17 @@ from app.agent.tools import confirmation_gate
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import session_scope
-from app.models import Alert, Machine, OrdreFabrication
+from app.models import Alert, LigneProduction, Machine, OrdreFabrication
 from app.models.enums import StatutMachine, TypeMaintenance
 from app.services import (
     broadcast_service,
+    line_queue_service,
     line_scoring_service,
     report_service,
     risk_service,
     simulator_service,
 )
+from app.services.line_queue_service import DispositionPreemption
 
 logger = get_logger(__name__)
 
@@ -216,7 +218,7 @@ def simuler_scenario_panne(
             of_info = {
                 "numero": of.numero,
                 "restant": restant,
-                "date_fin_prevue": of.date_fin_prevue.isoformat() if of.date_fin_prevue else None,
+                "date_echeance": of.date_echeance.isoformat() if of.date_echeance else None,
             }
             if cycle and cycle > 0:
                 heures_restantes = restant * float(cycle) / 3600
@@ -227,15 +229,15 @@ def simuler_scenario_panne(
                     f"- OF en cours {of.numero} : {restant:g} unité(s) restantes, "
                     f"fin estimée décalée au {nouvelle_fin:%Y-%m-%d %H:%M} UTC."
                 )
-                if of.date_fin_prevue is not None:
-                    if nouvelle_fin.date() > of.date_fin_prevue:
+                if of.date_echeance is not None:
+                    if nouvelle_fin.date() > of.date_echeance:
                         retard_txt = (
-                            f"⚠ La date de fin prévue ({of.date_fin_prevue.isoformat()}) "
+                            f"⚠ L'échéance client ({of.date_echeance.isoformat()}) "
                             "serait DÉPASSÉE."
                         )
                     else:
                         retard_txt = (
-                            f"La date de fin prévue ({of.date_fin_prevue.isoformat()}) "
+                            f"L'échéance client ({of.date_echeance.isoformat()}) "
                             "resterait tenable."
                         )
                     lignes_txt.append(f"- {retard_txt}")
@@ -282,6 +284,108 @@ def simuler_scenario_panne(
         return "\n".join(lignes_txt), artifact
 
 
+@tool(response_format="content_and_artifact")
+def analyser_bascule_of(
+    of_numero_ou_id: str, ligne_id: int
+) -> tuple[str, dict | None]:
+    """Analyse l'impact d'une bascule d'OF vers une ligne cible, SANS MODIFIER
+    l'atelier. Vérifie la compatibilité article/ligne et la disponibilité, puis
+    estime le temps restant avec 30 minutes de changement de format.
+
+    À appeler avant toute proposition de `basculer_of_vers_ligne`. Lecture seule :
+    aucune confirmation nécessaire.
+    """
+    with session_scope() as db:
+        of = _trouver_of(db, of_numero_ou_id)
+        if of is None:
+            return f"OF introuvable : {of_numero_ou_id}", None
+        ligne = db.get(LigneProduction, ligne_id)
+        if ligne is None or not ligne.actif:
+            return f"Ligne cible introuvable ou inactive : id={ligne_id}", None
+
+        source = db.execute(
+            select(Machine).where(Machine.ordre_fabrication_id == of.id)
+        ).scalars().first()
+        compatible = any(article.id == of.article_id for article in ligne.articles)
+        cible = line_scoring_service.machine_libre_sur_ligne(db, ligne_id)
+        restant = max(0.0, float(of.quantite_planifiee) - float(of.quantite_bonne))
+        source_cycle = (
+            float(source.temps_cycle_actuel_s or source.temps_cycle_cible_s)
+            if source and (source.temps_cycle_actuel_s or source.temps_cycle_cible_s)
+            else None
+        )
+        cible_cycle = (
+            float(cible.temps_cycle_actuel_s or cible.temps_cycle_cible_s)
+            if cible and (cible.temps_cycle_actuel_s or cible.temps_cycle_cible_s)
+            else None
+        )
+        setup_minutes = 30
+        source_minutes = restant * source_cycle / 60 if source_cycle else None
+        cible_minutes = setup_minutes + restant * cible_cycle / 60 if cible_cycle else None
+        delta_minutes = (
+            cible_minutes - source_minutes
+            if source_minutes is not None and cible_minutes is not None
+            else None
+        )
+
+        blockers: list[str] = []
+        if restant <= 0:
+            blockers.append("l'OF ne comporte plus de quantité à produire")
+        if of.ligne_production_id == ligne_id:
+            blockers.append("l'OF est déjà affecté à cette ligne")
+        if not compatible:
+            blockers.append(f"l'article {of.article.code} n'est pas homologué sur {ligne.code}")
+        if cible is None:
+            blockers.append("aucune machine cible n'est libre")
+
+        feasibility = "FAISABLE" if not blockers else "NON RECOMMANDÉE"
+        lines = [
+            f"Analyse lecture seule : bascule de l'OF {of.numero} vers {ligne.code} — {feasibility}.",
+            f"- Article : {of.article.code} ({of.article.designation}) — "
+            + ("compatible." if compatible else "non compatible avec la ligne."),
+            f"- Quantité restante : {restant:g} unité(s).",
+            f"- Réglage/changement de format estimé : {setup_minutes} min.",
+        ]
+        if cible is not None:
+            lines.append(
+                f"- Machine cible disponible : {cible.code} ({cible.nom})"
+                + (f", cycle {cible_cycle:g} s/unité." if cible_cycle else ", cycle inconnu.")
+            )
+        if cible_minutes is not None:
+            lines.append(f"- Durée estimée sur la cible, réglage inclus : {cible_minutes:.0f} min.")
+        if delta_minutes is not None:
+            direction = "retard" if delta_minutes > 0 else "gain"
+            lines.append(f"- Impact par rapport à la machine actuelle : {abs(delta_minutes):.0f} min de {direction} estimé.")
+        if blockers:
+            lines.append("- Points bloquants : " + "; ".join(blockers) + ".")
+        lines.append("Aucune affectation ni commande machine n'a été modifiée.")
+
+        artifact = {
+            "kind": "switch_impact",
+            "of": of.numero,
+            "article": {"id": of.article_id, "code": of.article.code},
+            "source": {
+                "ligne_id": of.ligne_production_id,
+                "machine": source.code if source else None,
+                "cycle_s": source_cycle,
+            },
+            "cible": {
+                "ligne_id": ligne.id,
+                "code": ligne.code,
+                "machine": cible.code if cible else None,
+                "cycle_s": cible_cycle,
+            },
+            "compatible": compatible,
+            "faisable": not blockers,
+            "restant": restant,
+            "setup_minutes": setup_minutes,
+            "duree_cible_minutes": cible_minutes,
+            "delta_minutes": delta_minutes,
+            "blocages": blockers,
+        }
+        return "\n".join(lines), artifact
+
+
 # --------------------------------------------------------------------------- #
 # Commandes SCADA (écriture — confirmation obligatoire)
 # --------------------------------------------------------------------------- #
@@ -317,6 +421,179 @@ def demarrer_machine(
         broadcast_service.diffuser_machine(db, machine)
         of_txt = f" avec l'OF id={ordre_fabrication_id}" if ordre_fabrication_id else ""
         return f"✅ Machine {machine.code} démarrée{of_txt}.", _action_executee(libelle)
+
+
+@tool(response_format="content_and_artifact")
+def lancer_of_maintenant(
+    of_numero_ou_id: str,
+    confirmation: bool,
+    preempt_disposition: str | None = None,
+    *,
+    config: RunnableConfig,
+) -> tuple[str, dict | None]:
+    """Lance immédiatement un OF sur une machine libre de sa ligne affectée.
+
+    Cette commande d'exécution SCADA ne nécessite PAS d'ordonnancement ni de
+    créneau prévisionnel : la date de début réelle est enregistrée au démarrage.
+    Elle résout automatiquement l'OF, sa ligne et une machine disponible.
+
+    Si la ligne est PLEINE (aucune machine libre), l'outil renvoie qui occupe la
+    ligne et n'agit pas : proposez alors à l'opérateur SOIT de préempter un OF en
+    cours en rappelant avec `preempt_disposition` = "requeue" (l'OF interrompu
+    reprendra son reliquat plus tard), "pause" (remis en attente hors ligne) ou
+    "cancel" (annulé) ; SOIT de mettre l'OF en file via `mettre_of_en_file`.
+
+    ACTION SUR L'ATELIER : accord explicite obligatoire avant `confirmation=true`.
+    """
+    with session_scope() as db:
+        of = _trouver_of(db, of_numero_ou_id)
+        if of is None:
+            return f"OF introuvable : {of_numero_ou_id}", None
+        if of.statut.value == "EN_COURS":
+            machine = db.execute(
+                select(Machine).where(Machine.ordre_fabrication_id == of.id)
+            ).scalars().first()
+            suffixe = f" sur {machine.code}" if machine else ""
+            return f"L'OF {of.numero} est déjà en cours{suffixe}.", None
+        if of.statut.value not in {"BROUILLON", "PLANIFIE"}:
+            return f"Impossible de lancer {of.numero} : statut {of.statut.value}.", None
+        if of.ligne_production_id is None or of.ligne_production is None:
+            return f"Impossible de lancer {of.numero} : aucune ligne ne lui est affectée.", None
+
+        disposition: DispositionPreemption | None = None
+        if preempt_disposition is not None:
+            try:
+                disposition = DispositionPreemption(preempt_disposition)
+            except ValueError:
+                return (
+                    f"Disposition inconnue : {preempt_disposition}. "
+                    "Choix : requeue, pause, cancel.",
+                    None,
+                )
+
+        machine_libre = line_scoring_service.machine_libre_sur_ligne(db, of.ligne_production_id)
+        if machine_libre is None and disposition is None:
+            # Ligne pleine et aucune consigne de préemption : on informe sans agir.
+            occupations = line_queue_service.occupations_ligne(db, of.ligne_production_id)
+            details = "; ".join(
+                f"{occ.machine.code} → OF {occ.ordre.numero} ({occ.ordre.article.code}, "
+                f"reste {line_queue_service._reste_a_produire(occ.ordre)})"
+                for occ in occupations
+            ) or "aucun OF identifié"
+            return (
+                f"La ligne {of.ligne_production.code} est occupée : {details}. "
+                f"Pour lancer {of.numero} maintenant, préemptez un OF en cours "
+                "(rappelez avec preempt_disposition=requeue|pause|cancel) ou "
+                "mettez-le en file (mettre_of_en_file).",
+                {
+                    "kind": "ligne_occupee",
+                    "of": of.numero,
+                    "ligne": of.ligne_production.code,
+                    "occupations": [
+                        {
+                            "machine": occ.machine.code,
+                            "of": occ.ordre.numero,
+                            "article": occ.ordre.article.code if occ.ordre.article else None,
+                            "reste": line_queue_service._reste_a_produire(occ.ordre),
+                        }
+                        for occ in occupations
+                    ],
+                },
+            )
+
+        quantite = format(of.quantite_planifiee, "f").rstrip("0").rstrip(".")
+        cible_txt = (
+            machine_libre.code
+            if machine_libre is not None
+            else f"une machine préemptée ({disposition.value})"
+        )
+        libelle = (
+            f"lancer maintenant l'OF {of.numero} ({of.article.code}, "
+            f"quantité {quantite}) sur {cible_txt} / {of.ligne_production.code}"
+        )
+        if not confirmation_gate.evaluer(
+            config,
+            "lancer_of_maintenant",
+            {"of": of.numero, "disposition": preempt_disposition},
+            confirmation,
+        ):
+            return _demande_confirmation(libelle)
+
+        try:
+            machine = line_queue_service.lancer_of_sur_ligne(
+                db, of, preempt_disposition=disposition
+            )
+        except AppError as exc:
+            return f"❌ {exc.message}", None
+        db.flush()
+        broadcast_service.diffuser_machine(db, machine)
+        broadcast_service.diffuser(
+            {"type": "ordres_update", "raison": "demarrage", "numero": of.numero}
+        )
+        prefixe = (
+            f"✅ OF {of.numero} lancé immédiatement sur {machine.code} "
+            f"({of.ligne_production.code}). Statut : EN_COURS."
+        )
+        if disposition is not None:
+            prefixe += f" OF en cours préempté (sort : {disposition.value})."
+        return prefixe, _action_executee(libelle)
+
+
+@tool(response_format="content_and_artifact")
+def mettre_of_en_file(
+    of_numero_ou_id: str,
+    ligne_code_ou_id: str,
+    confirmation: bool,
+    *,
+    config: RunnableConfig,
+) -> tuple[str, dict | None]:
+    """Met un OF en file d'attente sur une ligne, sans le démarrer.
+
+    L'OF est rattaché à la ligne et passé en PLANIFIE ; il prend sa place dans la
+    file (triée par échéance) et sera proposé au lancement quand la ligne se
+    libère. ACTION SUR L'ATELIER : accord explicite avant `confirmation=true`.
+    """
+    with session_scope() as db:
+        of = _trouver_of(db, of_numero_ou_id)
+        if of is None:
+            return f"OF introuvable : {of_numero_ou_id}", None
+        ligne: LigneProduction | None = None
+        if ligne_code_ou_id.isdigit():
+            ligne = db.get(LigneProduction, int(ligne_code_ou_id))
+        if ligne is None:
+            ligne = db.execute(
+                select(LigneProduction).where(LigneProduction.code == ligne_code_ou_id)
+            ).scalars().first()
+        if ligne is None:
+            return f"Ligne introuvable : {ligne_code_ou_id}", None
+
+        libelle = f"mettre l'OF {of.numero} en file sur la ligne {ligne.code}"
+        if not confirmation_gate.evaluer(
+            config, "mettre_of_en_file", {"of": of.numero, "ligne": ligne.code}, confirmation
+        ):
+            return _demande_confirmation(libelle)
+
+        try:
+            line_queue_service.mettre_en_file(db, of, ligne.id)
+        except AppError as exc:
+            return f"❌ {exc.message}", None
+        db.flush()
+        broadcast_service.diffuser(
+            {"type": "ordres_update", "raison": "mise_en_file", "numero": of.numero}
+        )
+        position = next(
+            (
+                i
+                for i, q in enumerate(line_queue_service.file_attente(db, ligne.id), start=1)
+                if q.id == of.id
+            ),
+            None,
+        )
+        pos_txt = f" (position {position} dans la file)" if position else ""
+        return (
+            f"✅ OF {of.numero} mis en file sur {ligne.code}{pos_txt}. Statut : PLANIFIE.",
+            _action_executee(libelle),
+        )
 
 
 @tool(response_format="content_and_artifact")
@@ -440,6 +717,16 @@ def basculer_of_vers_ligne(
         if of is None:
             return f"OF introuvable : {of_numero_ou_id}", None
 
+        ligne = db.get(LigneProduction, ligne_id)
+        if ligne is None or not ligne.actif:
+            return f"❌ Ligne cible introuvable ou inactive : id={ligne_id}.", None
+        if not any(article.id == of.article_id for article in ligne.articles):
+            return (
+                f"❌ Bascule refusée : l'article {of.article.code} n'est pas homologué "
+                f"sur la ligne {ligne.code}.",
+                None,
+            )
+
         cible = line_scoring_service.machine_libre_sur_ligne(db, ligne_id)
         if cible is None:
             return (
@@ -510,7 +797,10 @@ ACTION_TOOLS = [
     generer_rapport_production,
     risque_panne_machines,
     simuler_scenario_panne,
+    analyser_bascule_of,
     demarrer_machine,
+    lancer_of_maintenant,
+    mettre_of_en_file,
     arreter_machine,
     resoudre_arret_machine,
     lancer_maintenance,

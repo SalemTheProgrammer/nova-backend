@@ -38,6 +38,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001
         logger.warning("pinecone_index_check_skipped", error=str(exc))
 
+    # Checkpointer SQLite persistant : l'historique de conversation (par
+    # thread_id) survit au refresh de la page ET aux redémarrages du backend
+    # (contrairement au MemorySaver en RAM utilisé auparavant).
+    from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+    from app.agent.graph import init_graph
+    from app.core.paths import chat_history_db_path
+
+    checkpointer_cm = AsyncSqliteSaver.from_conn_string(chat_history_db_path())
+    checkpointer = await checkpointer_cm.__aenter__()
+    init_graph(checkpointer)
+
     # Enregistre la boucle serveur pour les broadcasts depuis les threads
     # (outils agent, superviseur, simulation auto).
     import asyncio
@@ -55,6 +67,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.services.scheduled_report_service import boucle_bilan_auto
 
         background_tasks.append(asyncio.create_task(boucle_bilan_auto()))
+    # Envois programmés par l'agent (« dans 5 minutes, envoie le bilan au +216… »).
+    from app.services.scheduler_service import boucle_envois_planifies
+
+    background_tasks.append(asyncio.create_task(boucle_envois_planifies()))
     if settings.auto_sim_autostart:
         from app.services.auto_simulator import auto_simulator
 
@@ -67,6 +83,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     auto_simulator.arreter()
     for task in background_tasks:
         task.cancel()
+    await checkpointer_cm.__aexit__(None, None, None)
     logger.info("shutdown")
 
 

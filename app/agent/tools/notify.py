@@ -16,7 +16,7 @@ from app.agent.tools import confirmation_gate
 from app.agent.tools.actions import _trouver_of
 from app.core.exceptions import AppError
 from app.db.session import session_scope
-from app.services import notify_service, pdf_service
+from app.services import document_files, notify_service, pdf_service
 
 CONFIRMATION_REQUISE = (
     "Confirmation requise : rappelez le destinataire et le canal à l'opérateur et "
@@ -134,8 +134,59 @@ def envoyer_message(
     return f"✅ {resultat}", _action_executee(libelle)
 
 
+@tool(response_format="content_and_artifact")
+def envoyer_document(
+    nom_document: str, canal: str, destinataire: str, confirmation: bool, *, config: RunnableConfig
+) -> tuple[str, dict | None]:
+    """ENVOIE un document de la base documentaire (norme, procédure, manuel
+    machine, fiche technique…) — le PDF source tel quel — par `canal` : "email"
+    ou "whatsapp" (numéro, ex. +216…). `nom_document` : nom approximatif accepté
+    (« manuel blistereuse », « norme BPF »).
+
+    À utiliser pour « envoie-moi le manuel… », « transmets la procédure X à… ».
+    Ne sert PAS à répondre à une question sur le contenu (→ `rechercher_documents`)
+    ni pour le bilan (→ `envoyer_rapport`). En cas de doute sur le document visé,
+    `lister_documents_disponibles` donne la liste. ACTION SORTANTE : accord
+    explicite de l'opérateur requis (récapitulez document + canal + destinataire)
+    avant de rappeler avec confirmation=true.
+    """
+    if canal not in CANAUX:
+        return f"Canal invalide : {canal!r}. Utilisez \"email\" ou \"whatsapp\".", None
+    with session_scope() as db:
+        document = document_files.trouver_document(db, nom_document)
+        if document is None:
+            return (
+                f"Document introuvable : « {nom_document} ». Appelle "
+                "`lister_documents_disponibles` et propose à l'opérateur le bon nom.",
+                None,
+            )
+        nom = document.nom
+        libelle = f"envoyer le document « {nom} » par {canal} à {destinataire}"
+        if not confirmation_gate.evaluer(
+            config,
+            "envoyer_document",
+            {"canal": canal, "destinataire": destinataire, "document_id": document.id},
+            confirmation,
+        ):
+            return _demande_confirmation(libelle)
+        try:
+            nom_fichier, pdf = document_files.lire_pdf(document)
+        except AppError as exc:
+            return f"❌ {exc.message}", None
+    sujet = f"Document « {nom} » — {datetime.now():%d/%m/%Y %H:%M}"
+    corps = f"{sujet}\nTransmis par Nova."
+    try:
+        resultat = _envoyer(canal, destinataire, sujet, corps, document=(nom_fichier, pdf))
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    return (
+        f"✅ {resultat} Pièce jointe : {nom_fichier} (« {nom} »).",
+        _action_executee(libelle),
+    )
+
+
 def _action_executee(libelle: str) -> dict:
     return {"kind": "action_executee", "libelle": libelle}
 
 
-NOTIFY_TOOLS = [envoyer_rapport, envoyer_message]
+NOTIFY_TOOLS = [envoyer_rapport, envoyer_message, envoyer_document]

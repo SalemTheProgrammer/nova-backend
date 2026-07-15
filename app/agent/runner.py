@@ -5,7 +5,7 @@ import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agent.graph import get_compiled_graph
 from app.agent.tools.navigation import PAGES, TOOL_PAGE_MAP
@@ -45,6 +45,104 @@ async def run_agent(message: str, *, thread_id: str, mode: str = "texte") -> str
         if isinstance(msg, AIMessage) and msg.content:
             return msg.content if isinstance(msg.content, str) else str(msg.content)
     raise AgentError("Agent produced no response")
+
+
+async def run_agent_avec_artifacts(
+    message: str, *, thread_id: str, mode: str = "texte"
+) -> tuple[str, list[dict]]:
+    """Comme `run_agent`, mais renvoie aussi les artifacts produits PENDANT CE
+    TOUR (graphiques, jauges…) pour les canaux qui doivent les rendre eux-mêmes
+    — WhatsApp les transforme en images PNG.
+
+    Seuls les ToolMessages situés APRÈS le dernier HumanMessage comptent : le
+    checkpointer rejoue tout l'historique du thread, on ne veut pas renvoyer
+    les graphiques des tours précédents.
+    """
+    settings = get_settings()
+    graph = get_compiled_graph()
+    config = {
+        "configurable": {"thread_id": thread_id, "invocation_id": str(uuid.uuid4())},
+        "recursion_limit": settings.agent_recursion_limit,
+    }
+    try:
+        result = await graph.ainvoke(
+            {"messages": [HumanMessage(content=message)], "mode": mode},
+            config=config,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("agent_run_failed", thread_id=thread_id)
+        raise AgentError("Agent execution failed") from exc
+
+    messages = result["messages"]
+    dernier_humain = 0
+    for i, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            dernier_humain = i
+    artifacts = [
+        msg.artifact
+        for msg in messages[dernier_humain:]
+        if isinstance(msg, ToolMessage) and isinstance(getattr(msg, "artifact", None), dict)
+    ]
+
+    for msg in reversed(messages):
+        if isinstance(msg, AIMessage) and msg.content:
+            texte = msg.content if isinstance(msg.content, str) else str(msg.content)
+            return texte, artifacts
+    raise AgentError("Agent produced no response")
+
+
+async def get_thread_history(thread_id: str) -> list[dict]:
+    """Reconstruit les tours UI (voir `AgentTurn`/`AgentSegment` côté frontend)
+    depuis l'historique de messages du checkpointer pour `thread_id`, afin que
+    le panneau de chat puisse se réhydrater après un refresh de page.
+    """
+    graph = get_compiled_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    state = await graph.aget_state(config)
+    messages = state.values.get("messages", []) if state.values else []
+    return _messages_to_turns(messages)
+
+
+def _messages_to_turns(messages: list) -> list[dict]:
+    turns: list[dict] = []
+    assistant_turn: dict | None = None
+    for i, msg in enumerate(messages):
+        if isinstance(msg, HumanMessage):
+            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            turns.append(
+                {"id": f"h-{i}", "role": "user", "segments": [{"type": "text", "content": content}]}
+            )
+            assistant_turn = {"id": f"a-{i}", "role": "assistant", "segments": []}
+            turns.append(assistant_turn)
+        elif isinstance(msg, AIMessage):
+            text = msg.content if isinstance(msg.content, str) else ""
+            if not text:
+                continue
+            if assistant_turn is None:
+                assistant_turn = {"id": f"a-{i}", "role": "assistant", "segments": []}
+                turns.append(assistant_turn)
+            segments = assistant_turn["segments"]
+            if segments and segments[-1]["type"] == "text":
+                segments[-1]["content"] += text
+            else:
+                segments.append({"type": "text", "content": text})
+        elif isinstance(msg, ToolMessage):
+            if assistant_turn is None:
+                assistant_turn = {"id": f"a-{i}", "role": "assistant", "segments": []}
+                turns.append(assistant_turn)
+            output = msg.content if isinstance(msg.content, str) else str(msg.content)
+            artifact = getattr(msg, "artifact", None)
+            assistant_turn["segments"].append(
+                {
+                    "type": "tool",
+                    "id": msg.tool_call_id or f"tool-{i}",
+                    "name": msg.name or "tool",
+                    "status": "done",
+                    "output": output,
+                    "artifact": artifact if isinstance(artifact, dict) else None,
+                }
+            )
+    return turns
 
 
 def _chunk_text(chunk: Any) -> str:

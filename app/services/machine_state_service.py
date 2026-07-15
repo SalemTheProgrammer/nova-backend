@@ -77,8 +77,11 @@ def appliquer(
     machine: Machine,
     type_evenement: TypeEvenementMachine,
     payload: dict,
-) -> None:
+) -> bool:
     """Applique la transition d'état correspondant à `type_evenement`."""
+
+    # event_service detaches the OF after the event has retained its OF id.
+    detacher_ordre = False
 
     if type_evenement == TypeEvenementMachine.MACHINE_STARTED:
         ordre_id = payload.get("ordre_fabrication_id")
@@ -117,39 +120,66 @@ def appliquer(
         TypeEvenementMachine.SCRAP_UNIT_PRODUCED,
         TypeEvenementMachine.QUALITY_EVENT_CREATED,
     ):
-        quantite = int(payload.get("quantite", 1))
-        machine.quantite_produite += quantite
         of = (
             db.get(OrdreFabrication, machine.ordre_fabrication_id)
             if machine.ordre_fabrication_id
             else None
         )
-        if type_evenement == TypeEvenementMachine.GOOD_UNIT_PRODUCED:
-            machine.quantite_bonne += quantite
-            db.add(
-                QualityEvent(
-                    machine_id=machine.id,
-                    ordre_fabrication_id=machine.ordre_fabrication_id,
-                    type=TypeEvenementQualite.BONNE,
-                    quantite=quantite,
+        quantite = max(0, int(payload.get("quantite", 1)))
+
+        if of is not None:
+            deja_produit = of.quantite_bonne + of.quantite_rejetee
+            restant = of.quantite_planifiee - deja_produit
+            if of.statut != StatutOF.EN_COURS or restant <= 0:
+                quantite = 0
+                if of.statut == StatutOF.EN_COURS:
+                    of.statut = StatutOF.TERMINE
+                    of.date_fin_reelle = of.date_fin_reelle or datetime.utcnow()
+                machine.statut = StatutMachine.ARRET
+                detacher_ordre = True
+            else:
+                quantite = min(quantite, max(0, int(restant)))
+
+        # Log the accepted quantity, which can be smaller than a simulator tick.
+        payload["quantite"] = quantite
+
+        if quantite > 0:
+            machine.quantite_produite += quantite
+            if type_evenement == TypeEvenementMachine.GOOD_UNIT_PRODUCED:
+                machine.quantite_bonne += quantite
+                db.add(
+                    QualityEvent(
+                        machine_id=machine.id,
+                        ordre_fabrication_id=machine.ordre_fabrication_id,
+                        type=TypeEvenementQualite.BONNE,
+                        quantite=quantite,
+                    )
                 )
-            )
-            if of is not None:
-                of.quantite_bonne = of.quantite_bonne + Decimal(quantite)
-        else:
-            machine.quantite_rejetee += quantite
-            cause = CauseRebut(payload.get("cause", CauseRebut.AUTRE.value))
-            db.add(
-                QualityEvent(
-                    machine_id=machine.id,
-                    ordre_fabrication_id=machine.ordre_fabrication_id,
-                    type=TypeEvenementQualite.REBUT,
-                    quantite=quantite,
-                    cause=cause,
+                if of is not None:
+                    of.quantite_bonne = of.quantite_bonne + Decimal(quantite)
+            else:
+                machine.quantite_rejetee += quantite
+                cause = CauseRebut(payload.get("cause", CauseRebut.AUTRE.value))
+                db.add(
+                    QualityEvent(
+                        machine_id=machine.id,
+                        ordre_fabrication_id=machine.ordre_fabrication_id,
+                        type=TypeEvenementQualite.REBUT,
+                        quantite=quantite,
+                        cause=cause,
+                    )
                 )
-            )
-            if of is not None:
-                of.quantite_rejetee = of.quantite_rejetee + Decimal(quantite)
+                if of is not None:
+                    of.quantite_rejetee = of.quantite_rejetee + Decimal(quantite)
+
+            if (
+                of is not None
+                and of.quantite_bonne + of.quantite_rejetee >= of.quantite_planifiee
+            ):
+                of.statut = StatutOF.TERMINE
+                of.date_fin_reelle = of.date_fin_reelle or datetime.utcnow()
+                machine.statut = StatutMachine.ARRET
+                detacher_ordre = True
 
     elif type_evenement == TypeEvenementMachine.DOWNTIME_STARTED:
         cause = CauseArret(payload.get("cause", CauseArret.AUTRE.value))
@@ -189,3 +219,5 @@ def appliquer(
 
     elif type_evenement == TypeEvenementMachine.PRODUCTION_COUNT_UPDATED:
         pass  # réservé pour une future synchronisation de totalisateur capteur
+
+    return detacher_ordre

@@ -22,6 +22,7 @@ from app.models.enums import (
 )
 from app.models.agent_proposal import AgentProposal
 from app.models.alert import Alert
+from app.models.envoi_planifie import EnvoiPlanifie
 from app.models.downtime_event import DowntimeEvent
 from app.models.fabrication import OFConsommationMP, OrdreFabrication
 from app.models.machine import Machine
@@ -82,4 +83,6 @@ __all__ = [
     # superviseur autonome
     "StatutProposition",
     "AgentProposal",
+    # envois sortants programmés
+    "EnvoiPlanifie",
 ]

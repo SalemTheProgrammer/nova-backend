@@ -1,15 +1,41 @@
 """Sous-agent RAG sur la base documentaire (normes, procédures, manuels…), avec
-citations + page."""
+citations + page — et liste des documents disponibles (pour les envois)."""
 from __future__ import annotations
 
 from langchain_core.tools import tool
+from sqlalchemy import select
 
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
+from app.db.session import session_scope
+from app.models import DocumentRag
 from app.services.citation_service import extraire_phrases_pertinentes
 from app.services.vector_store import search_documents
 
 logger = get_logger(__name__)
+
+
+@tool
+def lister_documents_disponibles() -> str:
+    """Liste les documents de la base documentaire (nom, catégorie, pages).
+
+    À utiliser pour savoir ce qui peut être envoyé via `envoyer_document` ou
+    programmé via `planifier_envoi` — notamment quand l'opérateur demande « quels
+    documents as-tu ? » ou que le document demandé n'a pas été trouvé.
+    """
+    with session_scope() as db:
+        documents = list(
+            db.execute(select(DocumentRag).order_by(DocumentRag.nom)).scalars()
+        )
+        if not documents:
+            return "La base documentaire est vide : aucun document à envoyer."
+        lignes = [
+            f"- {doc.nom} (id {doc.id}"
+            + (f", {doc.categorie}" if doc.categorie else "")
+            + f", {doc.nb_pages} p.)"
+            for doc in documents
+        ]
+    return "Documents disponibles à l'envoi :\n" + "\n".join(lignes)
 
 
 def _as_int(valeur: object) -> int | None:

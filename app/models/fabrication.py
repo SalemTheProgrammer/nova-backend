@@ -42,8 +42,14 @@ class OrdreFabrication(Base, TimestampMixin):
         SAEnum(StatutOF), default=StatutOF.BROUILLON, nullable=False
     )
     numero_lot_produit: Mapped[str | None] = mapped_column(String(100), nullable=True)
-    date_debut_prevue: Mapped[date | None] = mapped_column(Date, nullable=True)
-    date_fin_prevue: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # Échéance client : ENTRÉE de l'ordonnancement. Les règles EDD / ratio
+    # critique / marge trient dessus et le retard se mesure contre elle, donc
+    # l'ordonnanceur ne l'écrit JAMAIS — seul l'opérateur la fixe.
+    date_echeance: Mapped[date | None] = mapped_column(Date, nullable=True)
+    # SORTIES de l'ordonnanceur : le créneau projeté par la règle de dispatching.
+    # Écrites uniquement par `planning_service.appliquer`, sur les OF PLANIFIE.
+    date_debut_prevue: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    date_fin_prevue: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     date_debut_reelle: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     date_fin_reelle: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     cree_par: Mapped[str | None] = mapped_column(String(100), nullable=True)

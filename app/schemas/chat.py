@@ -28,3 +28,26 @@ class ChatRequest(BaseModel):
 class ChatResponse(BaseModel):
     thread_id: str
     response: str
+
+
+class AgentSegment(BaseModel):
+    """Miroir du type frontend `AgentSegment` (voir hooks/useAgentChat.ts)."""
+
+    type: Literal["text", "tool"]
+    id: str | None = None
+    name: str | None = None
+    status: Literal["running", "done"] | None = None
+    content: str | None = None
+    output: str | None = None
+    artifact: dict | None = None
+
+
+class AgentTurn(BaseModel):
+    id: str
+    role: Literal["user", "assistant"]
+    segments: list[AgentSegment]
+
+
+class ChatHistoryResponse(BaseModel):
+    thread_id: str
+    turns: list[AgentTurn]

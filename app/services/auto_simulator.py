@@ -25,7 +25,13 @@ from sqlalchemy import select
 from app.core.exceptions import FabricationError, NotFoundError
 from app.core.logging import get_logger
 from app.db.session import session_scope
-from app.models import LotMatierePremiere, Machine, MatierePremiere
+from app.models import (
+    DowntimeEvent,
+    LotMatierePremiere,
+    Machine,
+    MaintenanceEvent,
+    MatierePremiere,
+)
 from app.models.enums import CauseArret, CauseRebut, StatutLot, StatutMachine, TypeEvenementMachine
 from app.services import broadcast_service, event_service
 from app.services import manufacturing as manufacturing_svc
@@ -34,7 +40,10 @@ logger = get_logger(__name__)
 
 TICK_S = 2.0
 TAUX_REBUT = 0.04
-PROBA_MICRO_ARRET = 0.008  # par machine et par tick
+# Plus de micro-arrêt aléatoire : une machine en marche ne tombe plus en panne
+# toute seule. Les pannes ne surviennent que sur action délibérée (bouton
+# « Provoquer une panne » / alarme manuelle).
+PROBA_MICRO_ARRET = 0.0
 DUREE_MICRO_ARRET_S = (15, 40)
 PERIODE_TAG_TICKS = 8
 
@@ -62,8 +71,50 @@ class AutoSimulator:
     def demarrer(self) -> None:
         if self.actif:
             return
+        # Amorçage : on remet toute la ligne en marche avant de lancer la boucle,
+        # pour un plateau vivant et stable (plus aucune machine bloquée à l'arrêt,
+        # en panne ou en maintenance résiduelle).
+        try:
+            self._amorcer()
+        except Exception:  # noqa: BLE001
+            logger.exception("auto_simulator_amorcage_failed")
         self._task = asyncio.create_task(self._boucle())
         logger.info("auto_simulator_demarre")
+
+    def _amorcer(self) -> None:
+        """Redémarre toute machine active qui n'est pas déjà en marche.
+
+        Ferme les arrêts et maintenances encore ouverts puis repasse la machine en
+        MARCHE — la ligne repart proprement et rien ne reste figé d'un run précédent.
+        """
+        with session_scope() as db:
+            machines = db.execute(
+                select(Machine).where(Machine.actif.is_(True))
+            ).scalars().all()
+            for machine in machines:
+                if machine.statut == StatutMachine.MARCHE:
+                    continue
+                for dt in db.execute(
+                    select(DowntimeEvent).where(
+                        DowntimeEvent.machine_id == machine.id,
+                        DowntimeEvent.end_time.is_(None),
+                    )
+                ).scalars().all():
+                    dt.end_time = datetime.utcnow()
+                for me in db.execute(
+                    select(MaintenanceEvent).where(
+                        MaintenanceEvent.machine_id == machine.id,
+                        MaintenanceEvent.end_time.is_(None),
+                    )
+                ).scalars().all():
+                    me.end_time = datetime.utcnow()
+                self._micro_fin.pop(machine.id, None)
+                event_service.enregistrer_evenement(
+                    db,
+                    machine=machine,
+                    type_evenement=TypeEvenementMachine.MACHINE_STARTED,
+                )
+                broadcast_service.diffuser_machine(db, machine)
 
     def arreter(self) -> None:
         if self._task is not None:
@@ -103,27 +154,12 @@ class AutoSimulator:
                         broadcast_service.diffuser_machine(db, machine)
                     continue
 
-                if machine.statut != StatutMachine.MARCHE:
+                # Production is valid only while a machine is assigned to an OF.
+                if machine.statut != StatutMachine.MARCHE or machine.ordre_fabrication_id is None:
                     continue
 
                 cycle = float(machine.temps_cycle_actuel_s or machine.temps_cycle_cible_s or 0)
                 if cycle <= 0:
-                    continue
-
-                # Micro-arrêt aléatoire (uniquement machine en marche, pas déjà en arrêt).
-                if random.random() < PROBA_MICRO_ARRET:
-                    duree = random.randint(*DUREE_MICRO_ARRET_S)
-                    self._micro_fin[machine.id] = datetime.utcnow() + timedelta(seconds=duree)
-                    event_service.enregistrer_evenement(
-                        db,
-                        machine=machine,
-                        type_evenement=TypeEvenementMachine.DOWNTIME_STARTED,
-                        payload={
-                            "cause": CauseArret.MICRO_ARRET.value,
-                            "comment": f"Micro-arrêt aléatoire ({duree}s, simulation)",
-                        },
-                    )
-                    broadcast_service.diffuser_machine(db, machine)
                     continue
 
                 # Production au rythme du temps de cycle.
@@ -140,7 +176,7 @@ class AutoSimulator:
                             type_evenement=TypeEvenementMachine.GOOD_UNIT_PRODUCED,
                             payload={"quantite": n_bonnes},
                         )
-                    if n_rebuts > 0:
+                    if n_rebuts > 0 and machine.statut == StatutMachine.MARCHE:
                         event_service.enregistrer_evenement(
                             db,
                             machine=machine,

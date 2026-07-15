@@ -228,13 +228,63 @@ class FaisabiliteRead(BaseModel):
 class OFCreate(BaseModel):
     article_id: int
     quantite: Decimal = Field(gt=0)
-    date_fin_prevue: date | None = None
+    # Échéance client (jour) : donnée d'entrée de l'ordonnancement, jamais un résultat.
+    date_echeance: date | None = None
     ligne_production_id: int | None = None
     cree_par: str | None = None
 
 
 class OFStatutUpdate(BaseModel):
     statut: StatutOF
+
+
+class OFLigneUpdate(BaseModel):
+    ligne_production_id: int | None = None
+
+
+class OFEnFileRead(BaseModel):
+    """OF en attente sur une ligne (file dérivée, tri EDD)."""
+
+    id: int
+    numero: str
+    code_article: str
+    quantite_planifiee: Decimal
+    reste_a_produire: int
+    date_echeance: date | None
+
+
+class OccupationMachineRead(BaseModel):
+    """Machine occupée par un OF en cours sur la ligne."""
+
+    machine_id: int
+    machine_code: str
+    of_id: int
+    of_numero: str
+    code_article: str
+    reste_a_produire: int
+    date_echeance: date | None
+
+
+class ContexteLigneRead(BaseModel):
+    """État d'occupation d'une ligne : ce qui tourne, ce qui attend, machines libres."""
+
+    ligne_production_id: int
+    machines_libres: int
+    occupations: list[OccupationMachineRead]
+    file_attente: list[OFEnFileRead]
+
+
+class OFLancerRequest(BaseModel):
+    """Lancement d'un OF ; si la ligne est pleine, `preempt_disposition` décide du
+    sort de l'OF interrompu (requeue / pause / cancel). Absent → refus si pleine."""
+
+    preempt_disposition: str | None = None
+
+
+class OFMiseEnFileRequest(BaseModel):
+    """Mise en file d'un OF sur une ligne (rattachement + PLANIFIE, sans démarrage)."""
+
+    ligne_production_id: int
 
 
 class OFConsommationRead(BaseModel):
@@ -255,7 +305,10 @@ class OFRead(BaseModel):
     unite: Unite
     statut: StatutOF
     numero_lot_produit: str | None
-    date_fin_prevue: date | None
+    date_echeance: date | None
+    # Créneau projeté par l'ordonnanceur (null tant qu'aucune règle n'a été appliquée).
+    date_debut_prevue: datetime | None = None
+    date_fin_prevue: datetime | None = None
     ligne_production_id: int | None
     date_creation: datetime
     date_debut_reelle: datetime | None = None

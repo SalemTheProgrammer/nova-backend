@@ -390,7 +390,7 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
     ofs = db.execute(
         select(OrdreFabrication).where(
             OrdreFabrication.statut == StatutOF.EN_COURS,
-            OrdreFabrication.date_fin_prevue.is_not(None),
+            OrdreFabrication.date_echeance.is_not(None),
         )
     ).scalars().all()
 
@@ -415,14 +415,14 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
 
         heures_restantes = restant * float(cycle) / 3600
         fin_estimee = datetime.utcnow() + timedelta(hours=heures_restantes)
-        if fin_estimee.date() <= of.date_fin_prevue:
+        if fin_estimee.date() <= of.date_echeance:
             continue  # au rythme actuel, l'échéance reste tenable
 
         cle = f"retard_of:{of.id}:{datetime.utcnow():%Y%m%d}"
         if _deja_traitee(db, cle):
             continue
 
-        retard_j = (fin_estimee.date() - of.date_fin_prevue).days
+        retard_j = (fin_estimee.date() - of.date_echeance).days
         alternative = line_scoring_service.meilleure_ligne_disponible(
             db, exclure_ligne_id=machine.ligne_production_id
         )
@@ -430,7 +430,7 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
             diagnostic = (
                 f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
                 f"{fin_estimee:%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
-                f"({of.date_fin_prevue.isoformat()}). La ligne {alternative.code} est la "
+                f"({of.date_echeance.isoformat()}). La ligne {alternative.code} est la "
                 f"meilleure alternative : score {alternative.score * 100:.0f}/100 "
                 f"({alternative.raison})."
             )
@@ -457,7 +457,7 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
             diagnostic = (
                 f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
                 f"{fin_estimee:%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
-                f"({of.date_fin_prevue.isoformat()}). Aucune ligne alternative n'a de "
+                f"({of.date_echeance.isoformat()}). Aucune ligne alternative n'a de "
                 "machine libre : je recommande de signaler le retard dès maintenant."
             )
             nouvelles.append(
@@ -482,7 +482,10 @@ def analyser(db: Session) -> list[AgentProposal]:
     _regle_arret_bloquant(db, nouvelles)
     _regle_derive_qualite(db, nouvelles)
     _regle_stock_bas(db, nouvelles)
-    _regle_risque_panne_eleve(db, nouvelles)
+    # Règle de maintenance préventive désactivée : elle proposait en continu de
+    # mettre en maintenance les machines « à risque » (historique de pannes du
+    # jeu de démo), ce qui finissait par bloquer des machines en maintenance.
+    # _regle_risque_panne_eleve(db, nouvelles)
     _regle_retard_of(db, nouvelles)
     return nouvelles
 
@@ -595,7 +598,7 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
             type="RETARD_OF",
             message=(
                 f"OF {of.numero} en retard prévisionnel par rapport à l'échéance du "
-                f"{of.date_fin_prevue.isoformat() if of.date_fin_prevue else '—'}."
+                f"{of.date_echeance.isoformat() if of.date_echeance else '—'}."
             ),
         )
         db.add(alerte)

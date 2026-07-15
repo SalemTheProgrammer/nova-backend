@@ -19,3 +19,10 @@ class DowntimeRead(BaseModel):
     start_time: datetime
     end_time: datetime | None
     duree_s: Decimal | None
+
+
+class DowntimePage(BaseModel):
+    items: list[DowntimeRead]
+    total: int
+    page: int
+    page_size: int

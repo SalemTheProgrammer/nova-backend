@@ -22,12 +22,12 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
-from app.agent.runner import run_agent
+from app.agent.runner import run_agent_avec_artifacts
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.core.security import require_api_key
-from app.services import proactive_service
+from app.services import chart_image_service, proactive_service
 from app.services.notify_service import WHATSAPP_MAX_CHARS, normaliser_numero
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"], dependencies=[Depends(require_api_key)])
@@ -59,11 +59,21 @@ class WhatsAppInbound(BaseModel):
     push_name: str | None = Field(default=None, max_length=120)
 
 
+class WhatsAppImage(BaseModel):
+    """Image PNG à envoyer dans la conversation (graphique, jauge…)."""
+
+    filename: str
+    base64: str
+    caption: str | None = None
+
+
 class WhatsAppReply(BaseModel):
     reply: str
     # Rempli quand l'entrée était un vocal : la réponse repart aussi en note
     # vocale (opus/ogg, format natif WhatsApp).
     reply_audio_base64: str | None = None
+    # Graphiques/jauges générés pendant ce tour, rendus en PNG côté backend.
+    reply_images: list[WhatsAppImage] = []
 
 
 def formater_pour_whatsapp(texte: str) -> str:
@@ -198,7 +208,7 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
             proactive_service.traiter_reponse_operateur, e164, message
         )
         if decision is not None:
-            return await _reponse(decision, entree_vocale, e164)
+            return await _reponse(decision, entree_vocale, e164, [])
 
     # Photo : analyse vision injectée dans le message — l'agent commente,
     # rapproche des seuils qualité et peut proposer une action.
@@ -220,11 +230,49 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
     qui = f"{payload.push_name} {e164}" if payload.push_name else e164
     message = f"[WhatsApp — {qui}] {message}"
     # Un thread par numéro : mémoire multi-tours et confirmations comme sur le web.
-    reponse = await run_agent(message, thread_id=f"wa:{e164}", mode="whatsapp")
-    return await _reponse(reponse, entree_vocale, e164)
+    reponse, artifacts = await run_agent_avec_artifacts(
+        message, thread_id=f"wa:{e164}", mode="whatsapp"
+    )
+    images = await asyncio.to_thread(_rendre_artifacts_en_images, artifacts, e164)
+    return await _reponse(reponse, entree_vocale, e164, images)
 
 
-async def _reponse(texte: str, entree_vocale: bool, e164: str) -> WhatsAppReply:
+def _rendre_artifacts_en_images(artifacts: list[dict], e164: str) -> list[WhatsAppImage]:
+    """Graphiques et jauges du tour → PNG (matplotlib) prêts à partir en images."""
+    images: list[WhatsAppImage] = []
+    for i, artifact in enumerate(artifacts):
+        kind = artifact.get("kind")
+        try:
+            if kind == "chart":
+                png = chart_image_service.rendre_graphique_png(artifact)
+                titre = artifact.get("title") or "graphique"
+            elif kind == "gauge":
+                png = chart_image_service.rendre_jauge_png(
+                    artifact.get("title") or "Jauge",
+                    float(artifact.get("valeur_pct") or 0.0),
+                    artifact.get("objectif_pct"),
+                    artifact.get("sous_titre"),
+                )
+                titre = artifact.get("title") or "jauge"
+            else:
+                continue
+        except Exception:  # noqa: BLE001
+            logger.exception("whatsapp_rendu_image_failed", numero=e164, kind=kind)
+            continue
+        nom = re.sub(r"[^a-z0-9]+", "-", titre.lower()).strip("-")[:60] or f"visuel-{i}"
+        images.append(
+            WhatsAppImage(
+                filename=f"{nom}.png",
+                base64=base64.b64encode(png).decode("ascii"),
+                caption=titre,
+            )
+        )
+    return images
+
+
+async def _reponse(
+    texte: str, entree_vocale: bool, e164: str, images: list[WhatsAppImage]
+) -> WhatsAppReply:
     """Formate la réponse ; si l'entrée était un vocal, ajoute la version audio."""
     reply = formater_pour_whatsapp(texte)
     audio_b64: str | None = None
@@ -234,4 +282,4 @@ async def _reponse(texte: str, entree_vocale: bool, e164: str) -> WhatsAppReply:
             audio_b64 = base64.b64encode(audio).decode("ascii")
         except Exception:  # noqa: BLE001
             logger.warning("whatsapp_tts_failed", numero=e164)
-    return WhatsAppReply(reply=reply, reply_audio_base64=audio_b64)
+    return WhatsAppReply(reply=reply, reply_audio_base64=audio_b64, reply_images=images)

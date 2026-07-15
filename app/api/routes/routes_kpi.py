@@ -1,6 +1,7 @@
 """TRS/TRG/TRE (AFNOR), résumé tableau de bord, et insights IA instantanés."""
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -19,6 +20,7 @@ from app.schemas.kpi_schema import (
     MatiereConsommeeRead,
     OFActifRead,
     PertesRead,
+    PointOEERead,
     PointSerieRead,
     TempsModelRead,
     TRSRead,
@@ -55,19 +57,23 @@ def _trs_read(scope: str, scope_id: int | None, resultat: trs_service.TRSResult)
 def trs(
     scope: Literal["machine", "ligne", "of"] = Query(...),
     id: int = Query(...),
+    debut: datetime | None = Query(default=None),
+    fin: datetime | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> TRSRead:
     if scope == "machine":
         machine = db.get(Machine, id)
         if machine is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Machine introuvable")
-        return _trs_read(scope, id, trs_service.calculer_trs_machine(db, machine))
+        return _trs_read(
+            scope, id, trs_service.calculer_trs_machine(db, machine, depuis=debut, jusqua=fin)
+        )
 
     if scope == "ligne":
         machines = list(
             db.execute(select(Machine).where(Machine.ligne_production_id == id)).scalars()
         )
-        resultat = trs_service.calculer_trs_ligne(db, machines)
+        resultat = trs_service.calculer_trs_ligne(db, machines, depuis=debut, jusqua=fin)
         if resultat is None:
             raise HTTPException(
                 status.HTTP_404_NOT_FOUND, "Aucune machine avec un temps de cycle cible sur cette ligne"
@@ -175,6 +181,26 @@ def dashboard_resume(
             for m in r.matieres_consommees
         ],
     )
+
+
+@router.get("/kpi/oee-history", response_model=list[PointOEERead])
+def oee_history(
+    ligne_id: int | None = Query(default=None),
+    periode: Literal["day", "week", "month"] = Query(default="week"),
+    db: Session = Depends(get_db),
+) -> list[PointOEERead]:
+    points = dashboard_service.construire_historique_oee(db, ligne_id=ligne_id, periode=periode)
+    return [
+        PointOEERead(
+            label=p.label,
+            horodatage=p.horodatage,
+            disponibilite=p.disponibilite,
+            performance=p.performance,
+            qualite=p.qualite,
+            trs=p.trs,
+        )
+        for p in points
+    ]
 
 
 @router.get("/ai/insights", response_model=InsightsRead)

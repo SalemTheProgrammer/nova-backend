@@ -17,6 +17,7 @@ from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import session_scope
 from app.models import Article, LigneProduction, MatierePremiere, OrdreFabrication
+from app.services import broadcast_service
 from app.services import manufacturing as svc
 
 logger = get_logger(__name__)
@@ -31,19 +32,24 @@ def _parse_date(valeur: str | None) -> date | None:
         raise AppError(f"Date invalide '{valeur}' (format attendu AAAA-MM-JJ).")
 
 
-@tool
-def lister_articles() -> str:
-    """Liste les articles (produits finis) fabricables avec leur id et code.
+@tool(response_format="content_and_artifact")
+def lister_articles() -> tuple[str, dict | None]:
+    """Affiche les articles fabricables dans un tableau HTML interactif, sans ids techniques.
 
     À utiliser pour montrer à l'opérateur les produits disponibles à la fabrication.
     """
     with session_scope() as db:
         articles = db.execute(select(Article).where(Article.actif.is_(True))).scalars().all()
         if not articles:
-            return "Aucun article actif. Créez d'abord un article et sa nomenclature."
-        return "\n".join(
-            f"- id={a.id} | {a.code} | {a.designation} | unité {a.unite.value}" for a in articles
-        )
+            return "Aucun article actif. Créez d'abord un article et sa nomenclature.", None
+        artifact = {
+            "kind": "articles_catalogue",
+            "articles": [
+                {"code": a.code, "designation": a.designation}
+                for a in articles
+            ],
+        }
+        return f"{len(articles)} articles fabricables affichés dans le catalogue interactif.", artifact
 
 
 @tool
@@ -154,7 +160,7 @@ def creer_ordre_fabrication(
     article_id: int,
     quantite: float,
     confirmation: bool,
-    date_fin_prevue: str | None = None,
+    date_echeance: str | None = None,
     ligne_production_id: int | None = None,
     *,
     config: RunnableConfig,
@@ -162,10 +168,14 @@ def creer_ordre_fabrication(
     """Crée un ordre de fabrication : décrémente les matières premières en FEFO,
     enregistre la généalogie du lot, et planifie l'OF.
 
+    `date_echeance` (AAAA-MM-JJ) est l'ÉCHÉANCE CLIENT : la date à laquelle l'OF
+    est dû. Ce n'est pas une date de production — le créneau (début/fin prévus)
+    est calculé plus tard par `appliquer_ordonnancement`.
+
     ATTENTION — action IRRÉVERSIBLE (le stock est consommé). N'appelez cet outil
     qu'après avoir : (1) vérifié la disponibilité, (2) présenté le résultat à
-    l'opérateur, (3) obtenu sa confirmation explicite, (4) demandé la date de fin
-    prévue (AAAA-MM-JJ) et éventuellement la ligne de production.
+    l'opérateur, (3) obtenu sa confirmation explicite, (4) demandé l'échéance
+    client et éventuellement la ligne de production.
 
     `confirmation` DOIT valoir true uniquement si l'opérateur a confirmé explicitement.
     """
@@ -176,7 +186,7 @@ def creer_ordre_fabrication(
         {
             "article_id": article_id,
             "quantite": quantite,
-            "date_fin_prevue": date_fin_prevue,
+            "date_echeance": date_echeance,
             "ligne_production_id": ligne_production_id,
         },
         confirmation,
@@ -188,7 +198,7 @@ def creer_ordre_fabrication(
             {"kind": "confirmation_attente", "libelle": libelle},
         )
     try:
-        d_fin = _parse_date(date_fin_prevue)
+        d_echeance = _parse_date(date_echeance)
     except AppError as exc:
         return f"Erreur : {exc.message}", None
 
@@ -198,7 +208,7 @@ def creer_ordre_fabrication(
                 db,
                 article_id=article_id,
                 quantite=Decimal(str(quantite)),
-                date_fin_prevue=d_fin,
+                date_echeance=d_echeance,
                 ligne_production_id=ligne_production_id,
                 cree_par="agent",
             )
@@ -216,7 +226,7 @@ def creer_ordre_fabrication(
                 "numero": numero,
                 "lot_produit": lot,
                 "statut": "PLANIFIE",
-                "date_fin_prevue": date_fin_prevue,
+                "date_echeance": date_echeance,
                 "ligne_production_id": ligne_production_id,
                 "consommations": [
                     {
@@ -236,13 +246,21 @@ def creer_ordre_fabrication(
         lignes = [
             f"✅ Ordre de fabrication créé : {numero}",
             f"   Lot produit : {lot}",
-            f"   Statut : PLANIFIÉ"
-            + (f" | fin prévue {date_fin_prevue}" if date_fin_prevue else "")
-            + (f" | ligne id={ligne_production_id}" if ligne_production_id else ""),
+            f"   Statut : PLANIFIÉ (pas encore en production)"
+            + (f" | échéance {date_echeance}" if date_echeance else "")
+            + (f" | ligne id={ligne_production_id}" if ligne_production_id else " | aucune ligne affectée"),
             "   Matières premières consommées (FEFO) :",
             *conso,
+            "",
+            "⚠ Cet OF n'apparaîtra dans le jumeau numérique et ne sera visible en production "
+            "qu'après : 1) affectation d'une ligne, puis 2) son lancement effectif sur une "
+            "machine (outil `lancer_of_maintenant`). Tant que le statut reste PLANIFIÉ, "
+            "aucune animation n'est visible dans le twin.",
         ]
-        return "\n".join(lignes), artifact
+
+    # Hors du `with` : l'OF est commité, la page Ordres peut le recharger.
+    broadcast_service.diffuser({"type": "ordres_update", "raison": "creation", "numero": numero})
+    return "\n".join(lignes), artifact
 
 
 @tool
@@ -263,11 +281,17 @@ def consulter_ordre_fabrication(numero_ou_id: str) -> str:
             f" ← lot {c.lot.numero_lot} : {c.quantite_consommee}"
             for c in of.consommations
         ]
+        creneau = (
+            f"{of.date_debut_prevue:%d/%m %H:%M} → {of.date_fin_prevue:%d/%m %H:%M}"
+            if of.date_debut_prevue and of.date_fin_prevue
+            else "pas encore ordonnancé"
+        )
         return "\n".join(
             [
                 f"OF {of.numero} | article {of.article.code} | {of.quantite_planifiee} {of.unite.value}",
                 f"Statut : {of.statut.value} | lot produit : {of.numero_lot_produit}"
-                f" | fin prévue : {of.date_fin_prevue}",
+                f" | échéance client : {of.date_echeance or '—'}"
+                f" | créneau prévu : {creneau}",
                 "Généalogie (lots MP consommés) :",
                 *(conso or ["  (aucune)"]),
             ]

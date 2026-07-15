@@ -1,8 +1,7 @@
 """LangGraph wiring: agent <-> tools loop compiled into a runnable graph."""
 from __future__ import annotations
 
-from functools import lru_cache
-
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -25,11 +24,28 @@ def build_graph() -> StateGraph:
     return graph
 
 
-@lru_cache
-def get_compiled_graph() -> CompiledStateGraph:
-    """Compile once and reuse. MemorySaver gives per-thread conversation memory.
+_compiled_graph: CompiledStateGraph | None = None
 
-    Swap MemorySaver for a persistent checkpointer (e.g. Postgres) in production
-    if conversations must survive restarts / scale across replicas.
+
+def init_graph(checkpointer: BaseCheckpointSaver) -> CompiledStateGraph:
+    """Compile the graph with the given checkpointer. Called once from the
+    FastAPI lifespan (see `main.py`) with a persistent `AsyncSqliteSaver` so
+    conversation history (thread_id -> messages) survives page refreshes and
+    backend restarts, not just the lifetime of the process.
     """
-    return build_graph().compile(checkpointer=MemorySaver())
+    global _compiled_graph
+    _compiled_graph = build_graph().compile(checkpointer=checkpointer)
+    return _compiled_graph
+
+
+def get_compiled_graph() -> CompiledStateGraph:
+    """Return the graph compiled by `init_graph` during app startup.
+
+    Falls back to an in-memory (non-persistent) checkpointer if called outside
+    the normal FastAPI lifespan (e.g. ad-hoc scripts) so callers still work,
+    just without cross-restart durability.
+    """
+    global _compiled_graph
+    if _compiled_graph is None:
+        _compiled_graph = build_graph().compile(checkpointer=MemorySaver())
+    return _compiled_graph

@@ -51,6 +51,17 @@ def _seed_machines_si_absentes(db) -> None:
     print("Machines démo ajoutées : M-01, M-02.")
 
 
+def _seed_compatibilite_ligne(db) -> None:
+    """Répare les anciennes bases où PARA500 n'était relié à aucune ligne."""
+    article = db.query(Article).filter_by(code="PARA500").first()
+    ligne = db.query(LigneProduction).filter_by(code="LIGNE-COMP-01").first()
+    if article is None or ligne is None or article in ligne.articles:
+        return
+    ligne.articles.append(article)
+    db.commit()
+    print("Compatibilité ajoutée : PARA500 -> LIGNE-COMP-01.")
+
+
 def seed() -> None:
     init_db()
     db = SessionLocal()
@@ -58,6 +69,7 @@ def seed() -> None:
         if db.query(Article).filter_by(code="PARA500").first():
             print("Seed déjà présent — rien à faire.")
             _seed_machines_si_absentes(db)
+            _seed_compatibilite_ligne(db)
             return
 
         fournisseur = Fournisseur(
@@ -149,6 +161,7 @@ def seed() -> None:
         )
         db.add(article)
         db.flush()
+        ligne.articles.append(article)
 
         nomenclature = Nomenclature(article_id=article.id, version=1, actif=True)
         db.add(nomenclature)

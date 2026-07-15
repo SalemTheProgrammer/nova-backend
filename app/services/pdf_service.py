@@ -109,6 +109,44 @@ def _table_section(libelle: str, entetes: list[str], rangees: list[list[str]]) -
     return table
 
 
+# Largeur utile du cadre A4 avec les marges de `_document` (210 - 2×15 mm).
+LARGEUR_UTILE = 180 * mm
+
+
+def _table_paginable(
+    libelle: str, entetes: list[str], rangees: list[list[str]]
+) -> list:
+    """Section tabulaire qui peut s'étaler sur plusieurs pages.
+
+    `_table_section` fusionne le libellé sur TOUTE la hauteur (SPAN vertical) :
+    pratique pour une poignée de lignes, mais reportlab ne sait pas scinder une
+    cellule fusionnée, donc une longue table (ex. 26 OF) lève `LayoutError`. Ici
+    le libellé est un titre au-dessus d'une grille classique — la grille se scinde
+    proprement et réaffiche sa ligne d'en-têtes (`repeatRows=1`) sur chaque page.
+    """
+    if not rangees:
+        rangees = [["---"] * len(entetes)]
+    data = [[Paragraph(e, STYLE_CELL_B) for e in entetes]]
+    for r in rangees:
+        data.append([Paragraph(str(v), STYLE_CELL) for v in r])
+    largeur_col = LARGEUR_UTILE / len(entetes)
+    table = Table(data, colWidths=[largeur_col] * len(entetes), repeatRows=1)
+    table.setStyle(
+        TableStyle(
+            [
+                ("GRID", (0, 0), (-1, -1), 0.5, BORD),
+                ("BACKGROUND", (0, 0), (-1, 0), FOND_ENTETE),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
+    return [Paragraph(libelle, STYLE_SECTION), Spacer(0, 1.5 * mm), table]
+
+
 def _bandeau_identite(paires: list[tuple[str, str]]) -> Table:
     cellules = [
         Paragraph(
@@ -390,3 +428,78 @@ def generer_bilan_equipe_pdf(db: Session) -> bytes:
         ),
     ]
     return _document("Bilan de production Nova", elements)
+
+
+# --------------------------- Plan d'ordonnancement --------------------------- #
+
+
+def generer_ordonnancement_pdf(scenario) -> bytes:
+    """PDF du plan d'ordonnancement (un `planning_service.Scenario`), même charte
+    que les bilans : bandeau d'identité, KPI, créneaux par OF, non-planifiables.
+
+    Utilisé par l'outil agent `envoyer_ordonnancement` : le plan part en pièce
+    jointe (e-mail) ou en document (WhatsApp) pour l'équipe suivante.
+    """
+    creneaux = sorted(scenario.creneaux, key=lambda c: (c.debut, c.ligne_code))
+    elements: list = [
+        Paragraph("Plan d'ordonnancement", STYLE_TITRE),
+        Spacer(0, 5 * mm),
+        _bandeau_identite(
+            [
+                ("Règle", f"{scenario.algorithme} — {scenario.libelle}"),
+                ("Calculé le", f"{scenario.calcule_le:%d/%m/%Y %H:%M}"),
+                ("OF planifiés", str(len(scenario.planifies))),
+            ]
+        ),
+        Spacer(0, 3 * mm),
+        _table_section(
+            "Indicateurs",
+            ["OF en retard", "Retard cumulé", "Changements de série", "Durée du plan"],
+            [
+                [
+                    str(scenario.nb_retards),
+                    f"{scenario.retard_total_jours} j ({scenario.retard_total_h:.1f} h)",
+                    str(scenario.nb_changements_serie),
+                    f"{scenario.makespan_h:.1f} h",
+                ]
+            ],
+        ),
+        Spacer(0, 3 * mm),
+        *_table_paginable(
+            "Séquence",
+            ["#", "OF", "Article", "Qté", "Ligne", "Début", "Fin", "Échéance", "Retard"],
+            [
+                [
+                    "en cours" if c.en_cours else str(c.position),
+                    c.numero + (" ★" if c.prioritaire else ""),
+                    c.article,
+                    f"{c.quantite:.0f}",
+                    c.ligne_code,
+                    f"{c.debut:%d/%m %H:%M}",
+                    f"{c.fin:%d/%m %H:%M}",
+                    f"{c.echeance:%d/%m}" if c.echeance else "---",
+                    f"{c.retard_jours} j" if c.retard_jours > 0 else "---",
+                ]
+                for c in creneaux
+            ],
+        ),
+    ]
+    if scenario.prioritaires:
+        elements += [
+            Spacer(0, 3 * mm),
+            _table_section(
+                "Priorités opérateur",
+                ["OF passés en tête de file"],
+                [[", ".join(scenario.prioritaires)]],
+            ),
+        ]
+    if scenario.non_planifiables:
+        elements += [
+            Spacer(0, 3 * mm),
+            _table_section(
+                "Non planifiables",
+                ["OF", "Raison"],
+                [[num, raison] for num, raison in scenario.non_planifiables],
+            ),
+        ]
+    return _document("Plan d'ordonnancement Nova", elements)

@@ -106,9 +106,11 @@ def envoyer_whatsapp(
     numero: str,
     corps: str,
     document: tuple[str, bytes] | None = None,
+    image: bytes | None = None,
 ) -> str:
     """Envoie un message WhatsApp via le service Baileys local, avec document
-    PDF optionnel `(nom_fichier, contenu)`. Renvoie un résumé lisible."""
+    PDF optionnel `(nom_fichier, contenu)` ou image PNG (le message devient la
+    légende). Renvoie un résumé lisible."""
     settings = get_settings()
     e164 = normaliser_numero(numero)
     if len(corps) > WHATSAPP_MAX_CHARS:
@@ -119,6 +121,8 @@ def envoyer_whatsapp(
         nom_fichier, contenu = document
         payload["filename"] = nom_fichier
         payload["document_base64"] = base64.b64encode(contenu).decode("ascii")
+    elif image is not None:
+        payload["image_base64"] = base64.b64encode(image).decode("ascii")
 
     url = settings.whatsapp_service_url.rstrip("/") + "/send"
     try:

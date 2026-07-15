@@ -7,9 +7,9 @@ from collections.abc import AsyncIterator
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 
-from app.agent.runner import run_agent, stream_agent
+from app.agent.runner import get_thread_history, run_agent, stream_agent
 from app.core.security import require_api_key
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import ChatHistoryResponse, ChatRequest, ChatResponse
 
 router = APIRouter(tags=["agent"], dependencies=[Depends(require_api_key)])
 
@@ -18,6 +18,14 @@ router = APIRouter(tags=["agent"], dependencies=[Depends(require_api_key)])
 async def chat(payload: ChatRequest) -> ChatResponse:
     response = await run_agent(payload.message, thread_id=payload.thread_id, mode=payload.mode)
     return ChatResponse(thread_id=payload.thread_id, response=response)
+
+
+@router.get("/chat/{thread_id}/history", response_model=ChatHistoryResponse)
+async def chat_history(thread_id: str) -> ChatHistoryResponse:
+    """Historique des tours d'un thread, pour réhydrater le panneau de chat
+    après un refresh de page (voir `useAgentChat.ts`)."""
+    turns = await get_thread_history(thread_id)
+    return ChatHistoryResponse(thread_id=thread_id, turns=turns)
 
 
 def _sse(event: dict) -> str:

@@ -11,7 +11,8 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 from app.db.session import session_scope
-from app.services import chart_service
+from app.models import LigneProduction, Machine
+from app.services import chart_service, trs_service
 
 
 @tool(response_format="content_and_artifact")
@@ -65,4 +66,94 @@ def generer_graphique(
         return f"📊 Graphique affiché : {spec['title']}.", spec
 
 
-CHART_TOOLS = [generer_graphique]
+@tool(response_format="content_and_artifact")
+def generer_jauge(
+    indicateur: str = "trs",
+    scope: str = "usine",
+    id: int | None = None,
+    periode_heures: int = 8,
+) -> tuple[str, dict | None]:
+    """Affiche une JAUGE (cadran semi-circulaire, comme le dashboard) pour un
+    indicateur en pourcentage. À utiliser quand l'opérateur veut UNE valeur
+    visuelle (« la jauge du TRS », « où en est le TRS de M-01 », « score OEE »)
+    plutôt qu'une évolution dans le temps (là, préférer `generer_graphique`).
+
+    `indicateur` : "trs" (défaut), "trg", "tre", "qualite" (taux qualité TQ),
+    "performance" (TP) ou "disponibilite" (DO).
+    `scope` : "usine" (défaut), "ligne" ou "machine" — avec `id` pour ligne/machine.
+    `periode_heures` : fenêtre d'analyse (1 à 48, défaut 8).
+
+    Sur WhatsApp la jauge part en image dans la conversation ; commente-la en
+    une phrase (valeur, écart à l'objectif de 74 %).
+    """
+    indicateurs = ("trs", "trg", "tre", "qualite", "performance", "disponibilite")
+    if indicateur not in indicateurs:
+        return f"Indicateur invalide : {indicateur!r}. Choix : {', '.join(indicateurs)}.", None
+    periode_heures = max(1, min(48, periode_heures))
+    with session_scope() as db:
+        if scope == "machine" and id is not None:
+            machine = db.get(Machine, id)
+            if machine is None:
+                return f"Machine introuvable (id={id}).", None
+            if not machine.temps_cycle_cible_s:
+                return f"{machine.code} n'a pas de temps de cycle cible : TRS incalculable.", None
+            resultat = trs_service.calculer_trs_machine(db, machine)
+            libelle = f"{machine.code} — {machine.nom}"
+        elif scope == "ligne" and id is not None:
+            ligne = db.get(LigneProduction, id)
+            if ligne is None:
+                return f"Ligne introuvable (id={id}).", None
+            machines_ligne = (
+                db.query(Machine)
+                .filter(Machine.ligne_production_id == ligne.id, Machine.actif.is_(True))
+                .all()
+            )
+            resultat = trs_service.calculer_trs_ligne(db, machines_ligne)
+            if resultat is None:
+                return f"Aucune machine active avec temps de cycle sur {ligne.designation}.", None
+            libelle = ligne.designation
+        else:
+            machines = [
+                m for m in db.query(Machine).filter(Machine.actif.is_(True)).all()
+                if m.temps_cycle_cible_s
+            ]
+            if not machines:
+                return "Aucune machine active avec temps de cycle : jauge impossible.", None
+            resultats = [trs_service.calculer_trs_machine(db, m) for m in machines]
+            valeurs = {
+                "trs": sum(float(r.trs) for r in resultats) / len(resultats),
+                "trg": sum(float(r.trg) for r in resultats) / len(resultats),
+                "tre": sum(float(r.tre) for r in resultats) / len(resultats),
+                "qualite": sum(float(r.tq) for r in resultats) / len(resultats),
+                "performance": sum(float(r.tp) for r in resultats) / len(resultats),
+                "disponibilite": sum(float(r.do) for r in resultats) / len(resultats),
+            }
+            pct = valeurs[indicateur] * 100
+            titre = f"{indicateur.upper()} — usine"
+            return (
+                f"📟 Jauge affichée : {titre} à {pct:.0f} %.",
+                {
+                    "kind": "gauge", "title": titre, "valeur_pct": round(pct, 1),
+                    "objectif_pct": 74.0 if indicateur in ("trs", "trg", "tre") else None,
+                    "sous_titre": f"Moyenne de {len(machines)} machine(s) — {periode_heures} h",
+                },
+            )
+
+        valeurs = {
+            "trs": float(resultat.trs), "trg": float(resultat.trg), "tre": float(resultat.tre),
+            "qualite": float(resultat.tq), "performance": float(resultat.tp),
+            "disponibilite": float(resultat.do),
+        }
+        pct = valeurs[indicateur] * 100
+        titre = f"{indicateur.upper()} — {libelle}"
+        return (
+            f"📟 Jauge affichée : {titre} à {pct:.0f} %.",
+            {
+                "kind": "gauge", "title": titre, "valeur_pct": round(pct, 1),
+                "objectif_pct": 74.0 if indicateur in ("trs", "trg", "tre") else None,
+                "sous_titre": f"Fenêtre {periode_heures} h",
+            },
+        )
+
+
+CHART_TOOLS = [generer_graphique, generer_jauge]

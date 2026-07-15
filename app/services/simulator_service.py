@@ -65,6 +65,7 @@ def produire_bonne(db: Session, machine: Machine, *, quantite: int) -> None:
     _verifier(
         machine.statut == StatutMachine.MARCHE, f"{machine.code} doit être en marche pour produire."
     )
+    _verifier(quantite > 0, "La quantité produite doit être positive.")
     event_service.enregistrer_evenement(
         db,
         machine=machine,
@@ -77,6 +78,7 @@ def produire_rebut(db: Session, machine: Machine, *, quantite: int, cause: str) 
     _verifier(
         machine.statut == StatutMachine.MARCHE, f"{machine.code} doit être en marche pour produire."
     )
+    _verifier(quantite > 0, "La quantité rejetée doit être positive.")
     event_service.enregistrer_evenement(
         db,
         machine=machine,

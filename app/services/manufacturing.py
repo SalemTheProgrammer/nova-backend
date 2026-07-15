@@ -355,7 +355,7 @@ def creer_ordre_fabrication(
     *,
     article_id: int,
     quantite: Decimal,
-    date_fin_prevue: date | None = None,
+    date_echeance: date | None = None,
     ligne_production_id: int | None = None,
     cree_par: str | None = None,
 ) -> OrdreFabrication:
@@ -383,7 +383,9 @@ def creer_ordre_fabrication(
         unite=article.unite,
         ligne_production_id=ligne_production_id,
         statut=StatutOF.PLANIFIE,
-        date_fin_prevue=date_fin_prevue,
+        # Le créneau (date_debut_prevue/date_fin_prevue) reste vide : il est écrit
+        # par l'ordonnanceur, pas à la création.
+        date_echeance=date_echeance,
         numero_lot_produit=generer_numero_lot_produit(db, code_article=article.code),
         cree_par=cree_par,
     )

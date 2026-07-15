@@ -93,6 +93,15 @@ class MatiereConsommeeRead(BaseModel):
     quantite: Decimal
 
 
+class PointOEERead(BaseModel):
+    label: str
+    horodatage: datetime
+    disponibilite: Decimal
+    performance: Decimal
+    qualite: Decimal
+    trs: Decimal
+
+
 class DashboardResumeRead(BaseModel):
     trs_global: Decimal
     disponibilite: Decimal
