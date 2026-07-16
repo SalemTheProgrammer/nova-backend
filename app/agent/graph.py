@@ -1,21 +1,58 @@
 """LangGraph wiring: agent <-> tools loop compiled into a runnable graph."""
 from __future__ import annotations
 
+from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from app.agent.nodes.agent_node import call_model
+from app.agent.nodes.agent_node import REFUS_OUTIL, call_model
 from app.agent.state import AgentState
 from app.agent.tools import ALL_TOOLS
+
+_tool_node = ToolNode(ALL_TOOLS)
+
+
+def guarded_tools(state: AgentState, config: RunnableConfig | None = None) -> dict:
+    """Exécute les appels d'outils du dernier tour en filtrant le périmètre.
+
+    Deuxième filet APRÈS `bind_tools` (agent_node) : même si un modèle émettait
+    un appel hors périmètre, il est ici refusé (ToolMessage en français) au lieu
+    d'être exécuté. `outils_autorises=None` (admin) → tous les outils passent.
+    """
+    configurable = (config or {}).get("configurable") or {}
+    allowed = configurable.get("outils_autorises")
+    messages = state["messages"]
+    dernier = messages[-1] if messages else None
+
+    if allowed is None or not isinstance(dernier, AIMessage) or not dernier.tool_calls:
+        return _tool_node.invoke(state, config)
+
+    autorises = set(allowed)
+    permis = [tc for tc in dernier.tool_calls if tc["name"] in autorises]
+    refuses = [tc for tc in dernier.tool_calls if tc["name"] not in autorises]
+
+    sortie: list = []
+    if permis:
+        # ToolNode lit les tool_calls du dernier message : on lui présente une
+        # copie ne contenant que les appels permis (les ids sont préservés, donc
+        # les ToolMessages produits correspondent bien au message d'origine).
+        ai_permis = AIMessage(content=dernier.content, tool_calls=permis, id=dernier.id)
+        sous_etat = {**state, "messages": [*messages[:-1], ai_permis]}
+        resultat = _tool_node.invoke(sous_etat, config)
+        sortie.extend(resultat["messages"])
+    for tc in refuses:
+        sortie.append(ToolMessage(content=REFUS_OUTIL, tool_call_id=tc["id"], name=tc["name"]))
+    return {"messages": sortie}
 
 
 def build_graph() -> StateGraph:
     graph = StateGraph(AgentState)
     graph.add_node("agent", call_model)
-    graph.add_node("tools", ToolNode(ALL_TOOLS))
+    graph.add_node("tools", guarded_tools)
 
     graph.add_edge(START, "agent")
     # tools_condition routes to "tools" when the LLM emitted tool calls, else END.

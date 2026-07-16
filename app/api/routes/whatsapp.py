@@ -22,12 +22,16 @@ import re
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from sqlalchemy import select
+
 from app.agent.runner import run_agent_avec_artifacts
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.core.security import require_api_key
-from app.services import chart_image_service, proactive_service
+from app.db.session import session_scope
+from app.models.utilisateur import Utilisateur
+from app.services import auth_service, chart_image_service, proactive_service
 from app.services.notify_service import WHATSAPP_MAX_CHARS, normaliser_numero
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"], dependencies=[Depends(require_api_key)])
@@ -39,6 +43,23 @@ FALLBACK_AUDIO = (
     "Je n'ai pas réussi à écouter ce message vocal — peux-tu me l'écrire en texte ?"
 )
 FALLBACK_IMAGE = "Je n'ai pas réussi à analyser cette photo — peux-tu la renvoyer ?"
+
+# Préfixes de confiance ajoutés PAR LE SYSTÈME au message envoyé à l'agent
+# ([WhatsApp — identité] et [Photo envoyée par l'opérateur — analyse…]). Un
+# utilisateur qui les tape lui-même pourrait usurper une identité ou fabriquer
+# une fausse « analyse vision » (injection de prompt) : on retire toute
+# occurrence du texte entrant AVANT d'ajouter les vrais préfixes.
+_PREFIXES_RESERVES = re.compile(
+    r"\[\s*(?:WhatsApp|Photo envoyée par l'opérateur)[^\]]*\]", re.IGNORECASE
+)
+
+
+def _nettoyer_texte_entrant(texte: str, e164: str) -> str:
+    nettoye = _PREFIXES_RESERVES.sub("", texte)
+    if nettoye != texte:
+        logger.warning("whatsapp_prefixe_usurpe_retire", numero=e164)
+    return nettoye.strip()
+
 
 VISION_PROMPT = (
     "Tu es l'inspecteur qualité d'une usine pharmaceutique (BPF/GMP). Décris ce "
@@ -99,6 +120,26 @@ def _numero_autorise(e164: str) -> bool:
         except AppError:
             continue
     return False
+
+
+def _resoudre_acces(e164: str) -> tuple[bool, list[str] | None]:
+    """Autorisation + périmètre d'outils d'un numéro WhatsApp.
+
+    - Numéro enregistré et actif → (True, ses outils). L'admin → (True, None) =
+      tous les outils.
+    - Numéro enregistré mais désactivé → (False, _).
+    - Numéro inconnu → repli sur la liste blanche `WHATSAPP_ALLOWED_NUMBERS`
+      (tous les outils), pour ne pas casser la démo si la table est vide.
+    """
+    with session_scope() as db:
+        user = db.execute(
+            select(Utilisateur).where(Utilisateur.telephone == e164)
+        ).scalar_one_or_none()
+        if user is not None:
+            if not user.actif:
+                return False, None
+            return True, auth_service.outils_pour(user)
+    return _numero_autorise(e164), None
 
 
 def _decoder_base64(donnees_b64: str, *, quoi: str) -> bytes:
@@ -175,17 +216,19 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
         e164 = normaliser_numero(payload.from_number)
     except AppError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.message) from exc
-    if not _numero_autorise(e164):
+    autorise, outils_autorises = _resoudre_acces(e164)
+    if not autorise:
         logger.warning("whatsapp_inbound_refuse", numero=e164)
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Numéro non autorisé.")
 
-    message = (payload.message or "").strip()
+    message = _nettoyer_texte_entrant((payload.message or "").strip(), e164)
     entree_vocale = bool(payload.audio_base64) and not message
 
     if entree_vocale:
         donnees = _decoder_base64(payload.audio_base64 or "", quoi="Audio")
         try:
-            message = (await asyncio.to_thread(_transcrire_vocal, donnees)).strip()
+            transcription = (await asyncio.to_thread(_transcrire_vocal, donnees)).strip()
+            message = _nettoyer_texte_entrant(transcription, e164)
         except Exception:  # noqa: BLE001
             logger.exception("whatsapp_vocal_transcription_failed", numero=e164)
             return WhatsAppReply(reply=FALLBACK_AUDIO)
@@ -231,7 +274,7 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
     message = f"[WhatsApp — {qui}] {message}"
     # Un thread par numéro : mémoire multi-tours et confirmations comme sur le web.
     reponse, artifacts = await run_agent_avec_artifacts(
-        message, thread_id=f"wa:{e164}", mode="whatsapp"
+        message, thread_id=f"wa:{e164}", mode="whatsapp", outils_autorises=outils_autorises
     )
     images = await asyncio.to_thread(_rendre_artifacts_en_images, artifacts, e164)
     return await _reponse(reponse, entree_vocale, e164, images)

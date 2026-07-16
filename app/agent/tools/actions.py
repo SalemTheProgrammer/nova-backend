@@ -18,11 +18,13 @@ from sqlalchemy import select
 from app.agent.tools import confirmation_gate
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
+from app.core.temps import date_usine, en_heure_usine
 from app.db.session import session_scope
 from app.models import Alert, LigneProduction, Machine, OrdreFabrication
 from app.models.enums import StatutMachine, TypeMaintenance
 from app.services import (
     broadcast_service,
+    cost_service,
     line_queue_service,
     line_scoring_service,
     report_service,
@@ -179,11 +181,13 @@ def simuler_scenario_panne(
     """Analyse HYPOTHÉTIQUE (« et si ? ») : évalue l'impact d'une panne de
     `duree_minutes` minutes sur une machine, SANS RIEN MODIFIER dans l'atelier.
 
-    Calcule : pièces non produites pendant l'arrêt, retard estimé sur l'OF en
-    cours par rapport à sa date de fin prévue, et la meilleure ligne de repli
-    si un re-routage devenait nécessaire. À utiliser pour « et si M-01 tombe en
-    panne 2 heures ? », « quel serait l'impact d'un arrêt de 30 min ? », etc.
-    Lecture seule : aucune confirmation nécessaire.
+    Calcule : pièces non produites pendant l'arrêt, PERTE FINANCIÈRE estimée en
+    dinars (production non réalisée + immobilisation machine), retard estimé sur
+    l'OF en cours par rapport à sa date de fin prévue, et la meilleure ligne de
+    repli si un re-routage devenait nécessaire. À utiliser pour « et si M-01
+    tombe en panne 2 heures ? », « quel serait l'impact d'un arrêt de 30 min ? »,
+    « combien coûterait une panne d'une heure ? ». Lecture seule : aucune
+    confirmation nécessaire.
     """
     if duree_minutes <= 0:
         return "La durée simulée doit être positive (en minutes).", None
@@ -208,6 +212,11 @@ def simuler_scenario_panne(
         else:
             lignes_txt.append("- Production perdue : inconnue (pas de temps de cycle).")
 
+        cout = cost_service.estimer_cout_arret(
+            machine, float(duree_minutes), pieces_perdues=pieces_perdues
+        )
+        lignes_txt.append(f"- Perte financière estimée : {cout.resume()}.")
+
         of = machine.ordre_fabrication
         retard_txt: str | None = None
         of_info: dict | None = None
@@ -227,10 +236,10 @@ def simuler_scenario_panne(
                 )
                 lignes_txt.append(
                     f"- OF en cours {of.numero} : {restant:g} unité(s) restantes, "
-                    f"fin estimée décalée au {nouvelle_fin:%Y-%m-%d %H:%M} UTC."
+                    f"fin estimée décalée au {en_heure_usine(nouvelle_fin):%Y-%m-%d %H:%M}."
                 )
                 if of.date_echeance is not None:
-                    if nouvelle_fin.date() > of.date_echeance:
+                    if date_usine(nouvelle_fin) > of.date_echeance:
                         retard_txt = (
                             f"⚠ L'échéance client ({of.date_echeance.isoformat()}) "
                             "serait DÉPASSÉE."
@@ -267,6 +276,7 @@ def simuler_scenario_panne(
             "machine": machine.code,
             "duree_minutes": duree_minutes,
             "pieces_perdues": pieces_perdues,
+            "cout": cout.artifact(),
             "of": of_info,
             "retard": retard_txt,
             "repli": (
@@ -404,15 +414,21 @@ def demarrer_machine(
     ACTION SUR L'ATELIER : demandez toujours l'accord explicite de l'opérateur avant
     d'appeler avec confirmation=true.
     """
-    libelle = f"démarrer la machine {code_ou_id}"
-    if not confirmation_gate.evaluer(
-        config, "demarrer_machine", {"code_ou_id": code_ou_id, "of": ordre_fabrication_id}, confirmation
-    ):
-        return _demande_confirmation(libelle)
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
             return f"Machine introuvable : {code_ou_id}", None
+        # Signature du garde-fou sur l'ID CANONIQUE, pas sur la chaîne fournie :
+        # « M-01 » à la proposition puis « 1 » à la confirmation doivent matcher
+        # (sinon le garde-fou redemande une confirmation déjà donnée).
+        libelle = f"démarrer la machine {machine.code}"
+        if not confirmation_gate.evaluer(
+            config,
+            "demarrer_machine",
+            {"machine_id": machine.id, "of": ordre_fabrication_id},
+            confirmation,
+        ):
+            return _demande_confirmation(libelle)
         try:
             simulator_service.demarrer(db, machine, ordre_fabrication_id=ordre_fabrication_id)
         except AppError as exc:
@@ -518,7 +534,7 @@ def lancer_of_maintenant(
         if not confirmation_gate.evaluer(
             config,
             "lancer_of_maintenant",
-            {"of": of.numero, "disposition": preempt_disposition},
+            {"of_id": of.id, "disposition": preempt_disposition},
             confirmation,
         ):
             return _demande_confirmation(libelle)
@@ -576,7 +592,7 @@ def mettre_of_en_file(
 
         libelle = f"mettre l'OF {of.numero} en file sur la ligne {ligne.code}"
         if not confirmation_gate.evaluer(
-            config, "mettre_of_en_file", {"of": of.numero, "ligne": ligne.code}, confirmation
+            config, "mettre_of_en_file", {"of_id": of.id, "ligne_id": ligne.id}, confirmation
         ):
             return _demande_confirmation(libelle)
 
@@ -609,15 +625,15 @@ def arreter_machine(
 ) -> tuple[str, dict | None]:
     """Arrête une machine (commande SCADA). ACTION SUR L'ATELIER : accord explicite
     de l'opérateur requis avant confirmation=true."""
-    libelle = f"arrêter la machine {code_ou_id}"
-    if not confirmation_gate.evaluer(
-        config, "arreter_machine", {"code_ou_id": code_ou_id}, confirmation
-    ):
-        return _demande_confirmation(libelle)
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
             return f"Machine introuvable : {code_ou_id}", None
+        libelle = f"arrêter la machine {machine.code}"
+        if not confirmation_gate.evaluer(
+            config, "arreter_machine", {"machine_id": machine.id}, confirmation
+        ):
+            return _demande_confirmation(libelle)
         try:
             simulator_service.arreter(db, machine)
         except AppError as exc:
@@ -638,11 +654,6 @@ def arreter_ligne(
     ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant
     confirmation=true.
     """
-    libelle = f"arrêter toute la ligne {ligne_code_ou_id}"
-    if not confirmation_gate.evaluer(
-        config, "arreter_ligne", {"ligne_code_ou_id": ligne_code_ou_id}, confirmation
-    ):
-        return _demande_confirmation(libelle)
     with session_scope() as db:
         ligne: LigneProduction | None = None
         if ligne_code_ou_id.isdigit():
@@ -653,6 +664,12 @@ def arreter_ligne(
             ).scalars().first()
         if ligne is None:
             return f"Ligne introuvable : {ligne_code_ou_id}", None
+
+        libelle = f"arrêter toute la ligne {ligne.code}"
+        if not confirmation_gate.evaluer(
+            config, "arreter_ligne", {"ligne_id": ligne.id}, confirmation
+        ):
+            return _demande_confirmation(libelle)
 
         machines = list(
             db.execute(
@@ -701,18 +718,17 @@ def resoudre_arret_machine(
 ) -> tuple[str, dict | None]:
     """Clôture l'arrêt en cours d'une machine et la remet en service (commande SCADA).
     ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant confirmation=true."""
-    libelle = f"résoudre l'arrêt de {code_ou_id}"
-    if not confirmation_gate.evaluer(
-        config,
-        "resoudre_arret_machine",
-        {"code_ou_id": code_ou_id, "commentaire": commentaire},
-        confirmation,
-    ):
-        return _demande_confirmation(libelle)
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
             return f"Machine introuvable : {code_ou_id}", None
+        libelle = f"résoudre l'arrêt de {machine.code}"
+        # Le commentaire ne fait pas partie de la signature : le modèle peut le
+        # reformuler entre proposition et confirmation sans invalider l'accord.
+        if not confirmation_gate.evaluer(
+            config, "resoudre_arret_machine", {"machine_id": machine.id}, confirmation
+        ):
+            return _demande_confirmation(libelle)
         try:
             simulator_service.resoudre_arret(db, machine, comment=commentaire)
         except AppError as exc:
@@ -736,20 +752,20 @@ def lancer_maintenance(
 ) -> tuple[str, dict | None]:
     """Met une machine en maintenance (PREVENTIVE, CORRECTIVE ou URGENCE).
     ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant confirmation=true."""
-    libelle = f"lancer une maintenance {type_maintenance} sur {code_ou_id}"
-    if not confirmation_gate.evaluer(
-        config,
-        "lancer_maintenance",
-        {"code_ou_id": code_ou_id, "type_maintenance": type_maintenance},
-        confirmation,
-    ):
-        return _demande_confirmation(libelle)
     if type_maintenance not in TypeMaintenance.__members__:
         return "Type invalide : utilisez PREVENTIVE, CORRECTIVE ou URGENCE.", None
     with session_scope() as db:
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
             return f"Machine introuvable : {code_ou_id}", None
+        libelle = f"lancer une maintenance {type_maintenance} sur {machine.code}"
+        if not confirmation_gate.evaluer(
+            config,
+            "lancer_maintenance",
+            {"machine_id": machine.id, "type_maintenance": type_maintenance},
+            confirmation,
+        ):
+            return _demande_confirmation(libelle)
         try:
             simulator_service.demarrer_maintenance(
                 db, machine, type_maintenance=type_maintenance, description=description
@@ -775,14 +791,6 @@ def basculer_of_vers_ligne(
     `choisir_meilleure_ligne` d'abord pour justifier la ligne cible.
     ACTION SUR L'ATELIER : accord explicite de l'opérateur requis avant confirmation=true.
     """
-    libelle = f"basculer l'OF {of_numero_ou_id} vers la ligne id={ligne_id}"
-    if not confirmation_gate.evaluer(
-        config,
-        "basculer_of_vers_ligne",
-        {"of": of_numero_ou_id, "ligne_id": ligne_id},
-        confirmation,
-    ):
-        return _demande_confirmation(libelle)
     with session_scope() as db:
         of = _trouver_of(db, of_numero_ou_id)
         if of is None:
@@ -791,6 +799,15 @@ def basculer_of_vers_ligne(
         ligne = db.get(LigneProduction, ligne_id)
         if ligne is None or not ligne.actif:
             return f"❌ Ligne cible introuvable ou inactive : id={ligne_id}.", None
+
+        libelle = f"basculer l'OF {of.numero} vers la ligne {ligne.code}"
+        if not confirmation_gate.evaluer(
+            config,
+            "basculer_of_vers_ligne",
+            {"of_id": of.id, "ligne_id": ligne.id},
+            confirmation,
+        ):
+            return _demande_confirmation(libelle)
         if not any(article.id == of.article_id for article in ligne.articles):
             return (
                 f"❌ Bascule refusée : l'article {of.article.code} n'est pas homologué "

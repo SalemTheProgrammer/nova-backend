@@ -17,7 +17,7 @@ from langchain_core.tools import tool
 
 from app.agent.tools import confirmation_gate
 from app.agent.tools.actions import _trouver_of
-from app.agent.tools.notify import CANAUX, CONFIRMATION_REQUISE
+from app.agent.tools.notify import CANAUX, CONFIRMATION_REQUISE, _destinataire_canonique
 from app.db.session import session_scope
 from app.models.envoi_planifie import (
     STATUT_EN_ATTENTE,
@@ -80,6 +80,7 @@ def planifier_envoi(
             f"et {DELAI_MAX_MINUTES} minutes (une semaine max).",
             None,
         )
+    destinataire = _destinataire_canonique(canal, destinataire)
 
     with session_scope() as db:
         # Résolution + validation de la cible AVANT de programmer, pour un retour

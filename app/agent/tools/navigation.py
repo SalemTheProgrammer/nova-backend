@@ -32,9 +32,9 @@ PAGES: dict[str, str] = {
 def aller_a_la_page(page: str, raison: str | None = None) -> tuple[str, dict | None]:
     """Redirige l'interface vers la page correspondant à la question de l'opérateur.
 
-    `page` doit être exactement l'une de : dashboard, simulateur, machines, trs,
-    arrets, qualite, maintenance, stock, ordres, articles, matieres, lignes,
-    fournisseurs, documents.
+    `page` doit être exactement l'une de : dashboard, jumeau, simulateur,
+    machines, trs, arrets, qualite, maintenance, stock, ordres, articles,
+    matieres, lignes, fournisseurs, documents.
 
     À appeler dès que la réponse concerne un domaine ayant une page dédiée, pour
     que l'opérateur voie l'information en contexte pendant que tu réponds. Ne
@@ -66,12 +66,14 @@ TOOL_PAGE_MAP: dict[str, str] = {
     "rechercher_article": "articles",
     "creer_ordre_fabrication": "ordres",
     "consulter_ordre_fabrication": "ordres",
+    "lister_ordres_par_quantite": "ordres",
     "lister_lignes_production": "lignes",
     "choisir_meilleure_ligne": "lignes",
     "analyser_bascule_of": "jumeau",
     "basculer_of_vers_ligne": "ordres",
     "mettre_of_en_file": "ordres",
     "etat_machine": "machines",
+    "etat_ligne": "machines",
     "demarrer_machine": "machines",
     "arreter_machine": "machines",
     "resume_trs": "trs",

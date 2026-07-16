@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError, FabricationError, NotFoundError
 from app.core.logging import get_logger
+from app.core.temps import date_usine
 from app.db.session import session_scope
 from app.models import (
     AgentProposal,
@@ -48,6 +49,7 @@ from app.models.enums import (
 )
 from app.services import (
     broadcast_service,
+    cost_service,
     line_scoring_service,
     notify_service,
     risk_service,
@@ -66,6 +68,60 @@ MIN_PIECES_QUALITE = 5
 DELAI_REARMEMENT = timedelta(minutes=10)
 INTERVALLE_BOUCLE_S = 5.0
 
+# --------------------------------------------------------------------------- #
+# Autonomie du superviseur : trois modes, deux niveaux de risque.
+#
+# - "manuel"     : comportement historique — toute proposition attend l'opérateur.
+# - "assiste"    : les propositions à risque FAIBLE (aucun impact sur une
+#   production en cours : un simple constat, ou une machine déjà libre)
+#   s'exécutent seules, immédiatement.
+# - "autopilote" : idem "assiste", PLUS les propositions à risque MOYEN (elles
+#   déplacent un OF, arrêtent une machine en marche, ou contactent un tiers)
+#   s'exécutent seules après `autopilote_delai_moyen_s` secondes — le temps
+#   pour l'opérateur de les rejeter — sauf rejet explicite avant l'échéance.
+#
+# Le mode est mutable en RUNTIME (voir `definir_mode_autonomie`, exposé par
+# POST /api/v1/agent/autonomie) : la démo doit pouvoir tourner le bouton sans
+# redémarrer le backend.
+# --------------------------------------------------------------------------- #
+
+RISQUE_FAIBLE = "faible"
+RISQUE_MOYEN = "moyen"
+RISQUE_PAR_TYPE: dict[str, str] = {
+    "alerte_retard": RISQUE_FAIBLE,  # crée juste une alerte, ne touche à rien
+    "maintenance_preventive": RISQUE_FAIBLE,  # jamais sur une machine avec OF actif
+    "stock_bas": RISQUE_MOYEN,  # peut contacter un fournisseur
+    "derive_qualite": RISQUE_MOYEN,  # met en pause une machine en marche
+    "basculer_of": RISQUE_MOYEN,  # déplace un OF, démarre une autre machine
+    "maintenance_urgence": RISQUE_MOYEN,  # arrête une machine déjà bloquée
+}
+
+MODES_AUTONOMIE = ("manuel", "assiste", "autopilote")
+# None = pas encore initialisé depuis la config (voir `mode_autonomie`).
+_mode_autonomie: str | None = None
+
+
+def mode_autonomie() -> str:
+    """Mode d'autonomie courant. Initialisé depuis `Settings.autonomy_mode_defaut`
+    au premier appel, puis mutable en mémoire process via `definir_mode_autonomie`."""
+    global _mode_autonomie
+    if _mode_autonomie is None:
+        from app.core.config import get_settings
+
+        _mode_autonomie = get_settings().autonomy_mode_defaut
+    return _mode_autonomie
+
+
+def definir_mode_autonomie(mode: str) -> str:
+    global _mode_autonomie
+    if mode not in MODES_AUTONOMIE:
+        raise AppError(
+            f"Mode d'autonomie invalide : {mode!r}. Choix : {', '.join(MODES_AUTONOMIE)}."
+        )
+    _mode_autonomie = mode
+    logger.info("autonomie_mode_change", mode=mode)
+    return _mode_autonomie
+
 
 def serialiser_proposition(p: AgentProposal) -> dict:
     return {
@@ -82,6 +138,9 @@ def serialiser_proposition(p: AgentProposal) -> dict:
         "resultat": p.resultat,
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "decided_at": p.decided_at.isoformat() if p.decided_at else None,
+        "decideur": p.decideur,
+        "execution_auto_at": p.execution_auto_at.isoformat() if p.execution_auto_at else None,
+        "risque": RISQUE_PAR_TYPE.get(p.type, RISQUE_MOYEN),
     }
 
 
@@ -128,7 +187,32 @@ def _proposer(
     db.flush()
     db.refresh(proposition)
     logger.info("proposition_creee", type=type_, cle=cle, id=proposition.id)
+    _appliquer_autonomie(db, proposition)
     return proposition
+
+
+def _appliquer_autonomie(db: Session, proposition: AgentProposal) -> None:
+    """Décide si `proposition`, qui vient d'être créée, s'exécute seule ou
+    attend l'opérateur — selon le mode d'autonomie courant et son risque."""
+    mode = mode_autonomie()
+    if mode == "manuel":
+        return
+    risque = RISQUE_PAR_TYPE.get(proposition.type, RISQUE_MOYEN)
+    if risque == RISQUE_FAIBLE:
+        decider(
+            db, proposition.id, approuver=True, canal="systeme",
+            identite="autopilote", decideur="autopilote",
+        )
+        return
+    if mode == "autopilote":
+        from app.core.config import get_settings
+
+        delai = get_settings().autopilote_delai_moyen_s
+        proposition.execution_auto_at = datetime.utcnow() + timedelta(seconds=delai)
+        db.flush()
+        broadcast_service.diffuser(
+            {"type": "agent_proposal_update", "proposal": serialiser_proposition(proposition)}
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -162,6 +246,17 @@ def _regle_arret_bloquant(db: Session, nouvelles: list[AgentProposal]) -> None:
         duree_txt = f"{duree_min} min" if duree_min >= 1 else f"{int(duree_s)} s"
         cause_txt = arret.cause.value.replace("_", " ").lower()
 
+        # Chiffrage en dinars : ce que l'arrêt a déjà coûté et ce que chaque
+        # minute supplémentaire coûte — c'est l'argument qui fait décider.
+        cout = cost_service.estimer_cout_arret(machine, duree_s / 60, of=of)
+        cout_txt = (
+            f" Perte estimée depuis le début de l'arrêt : "
+            f"{cost_service.format_tnd(cout.total_tnd)} "
+            f"(≈ {cost_service.format_tnd(cout.par_minute_tnd)}/min supplémentaire)."
+            if cout.total_tnd > 0
+            else ""
+        )
+
         alternative = line_scoring_service.meilleure_ligne_disponible(
             db, exclure_ligne_id=machine.ligne_production_id
         )
@@ -169,8 +264,8 @@ def _regle_arret_bloquant(db: Session, nouvelles: list[AgentProposal]) -> None:
             diagnostic = (
                 f"{machine.code} est arrêtée depuis {duree_txt} ({cause_txt}) et bloque "
                 f"l'OF {of.numero} ({of.quantite_planifiee} {of.unite.value} de "
-                f"{of.article.code}). La ligne {alternative.code} est la meilleure "
-                f"alternative : score {alternative.score * 100:.0f}/100 "
+                f"{of.article.code}).{cout_txt} La ligne {alternative.code} est la "
+                f"meilleure alternative : score {alternative.score * 100:.0f}/100 "
                 f"({alternative.raison})."
             )
             nouvelles.append(
@@ -195,9 +290,9 @@ def _regle_arret_bloquant(db: Session, nouvelles: list[AgentProposal]) -> None:
         else:
             diagnostic = (
                 f"{machine.code} est arrêtée depuis {duree_txt} ({cause_txt}) et bloque "
-                f"l'OF {of.numero}. Aucune ligne alternative n'a de machine libre : "
-                f"je recommande une maintenance d'urgence pour remettre {machine.code} "
-                "en service au plus vite."
+                f"l'OF {of.numero}.{cout_txt} Aucune ligne alternative n'a de machine "
+                f"libre : je recommande une maintenance d'urgence pour remettre "
+                f"{machine.code} en service au plus vite."
             )
             nouvelles.append(
                 _proposer(
@@ -356,6 +451,12 @@ def _regle_risque_panne_eleve(db: Session, nouvelles: list[AgentProposal]) -> No
             continue
         if machine.id in machines_en_arret:
             continue
+        # Jamais sur une machine qui porte un OF : une maintenance préventive ne
+        # doit pas interrompre une production en cours (c'est ce comportement qui
+        # avait fait désactiver la règle). On ne propose que pour les machines
+        # libres, où la maintenance est sans impact sur le plan.
+        if machine.ordre_fabrication_id is not None:
+            continue
         cle = f"risque_panne:{machine.id}:{datetime.utcnow():%Y%m%d}"
         if _deja_traitee(db, cle):
             continue
@@ -415,21 +516,23 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
 
         heures_restantes = restant * float(cycle) / 3600
         fin_estimee = datetime.utcnow() + timedelta(hours=heures_restantes)
-        if fin_estimee.date() <= of.date_echeance:
+        # Comparaison en date USINE (UTC+1) : l'échéance client est une date
+        # locale, la projection UTC peut être un jour en retard autour de minuit.
+        if date_usine(fin_estimee) <= of.date_echeance:
             continue  # au rythme actuel, l'échéance reste tenable
 
         cle = f"retard_of:{of.id}:{datetime.utcnow():%Y%m%d}"
         if _deja_traitee(db, cle):
             continue
 
-        retard_j = (fin_estimee.date() - of.date_echeance).days
+        retard_j = (date_usine(fin_estimee) - of.date_echeance).days
         alternative = line_scoring_service.meilleure_ligne_disponible(
             db, exclure_ligne_id=machine.ligne_production_id
         )
         if alternative is not None:
             diagnostic = (
                 f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
-                f"{fin_estimee:%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
+                f"{date_usine(fin_estimee):%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
                 f"({of.date_echeance.isoformat()}). La ligne {alternative.code} est la "
                 f"meilleure alternative : score {alternative.score * 100:.0f}/100 "
                 f"({alternative.raison})."
@@ -456,7 +559,7 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
         else:
             diagnostic = (
                 f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
-                f"{fin_estimee:%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
+                f"{date_usine(fin_estimee):%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
                 f"({of.date_echeance.isoformat()}). Aucune ligne alternative n'a de "
                 "machine libre : je recommande de signaler le retard dès maintenant."
             )
@@ -482,10 +585,10 @@ def analyser(db: Session) -> list[AgentProposal]:
     _regle_arret_bloquant(db, nouvelles)
     _regle_derive_qualite(db, nouvelles)
     _regle_stock_bas(db, nouvelles)
-    # Règle de maintenance préventive désactivée : elle proposait en continu de
-    # mettre en maintenance les machines « à risque » (historique de pannes du
-    # jeu de démo), ce qui finissait par bloquer des machines en maintenance.
-    # _regle_risque_panne_eleve(db, nouvelles)
+    # Maintenance prédictive : ne propose que pour les machines à risque élevé
+    # SANS OF actif (voir le garde dans la règle) — une proposition ne peut donc
+    # jamais bloquer une production en cours.
+    _regle_risque_panne_eleve(db, nouvelles)
     _regle_retard_of(db, nouvelles)
     return nouvelles
 
@@ -611,8 +714,25 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
     raise AppError(f"Action inconnue : {type_!r}")
 
 
-def decider(db: Session, proposition_id: int, *, approuver: bool) -> AgentProposal:
-    """Approuve (et exécute) ou rejette une proposition. Diffuse la mise à jour."""
+def decider(
+    db: Session,
+    proposition_id: int,
+    *,
+    approuver: bool,
+    canal: str = "web",
+    identite: str | None = None,
+    decideur: str = "operateur",
+) -> AgentProposal:
+    """Approuve (et exécute) ou rejette une proposition. Diffuse la mise à jour.
+
+    `canal`/`identite` attribuent la décision dans le journal d'audit :
+    "web"/console pour les cartes de l'interface, "whatsapp"/+216… pour une
+    réponse « oui » depuis le téléphone (voir `proactive_service`).
+    `decideur` distingue une décision humaine ("operateur", défaut) d'une
+    exécution automatique du superviseur ("autopilote" — voir
+    `_appliquer_autonomie` / `_executer_autopilote_echus`) : c'est ce que
+    l'interface affiche ("🤖 Nova a agi seule").
+    """
     proposition = db.get(AgentProposal, proposition_id)
     if proposition is None:
         raise NotFoundError("Proposition introuvable.")
@@ -620,9 +740,12 @@ def decider(db: Session, proposition_id: int, *, approuver: bool) -> AgentPropos
         raise FabricationError("Cette proposition a déjà été traitée.")
 
     proposition.decided_at = datetime.utcnow()
+    proposition.decideur = decideur
     if not approuver:
         proposition.statut = StatutProposition.REJETEE
-        proposition.resultat = "Rejetée par l'opérateur."
+        proposition.resultat = (
+            "Rejetée par l'opérateur." if decideur == "operateur" else "Rejetée automatiquement."
+        )
     else:
         proposition.statut = StatutProposition.APPROUVEE
         try:
@@ -635,6 +758,18 @@ def decider(db: Session, proposition_id: int, *, approuver: bool) -> AgentPropos
             proposition.resultat = resume
     db.commit()
     db.refresh(proposition)
+
+    from app.services import audit_service
+
+    audit_service.enregistrer_action(
+        action=f"proposition_{'approuvee' if approuver else 'rejetee'}",
+        arguments={"proposition_id": proposition.id, "type": proposition.type,
+                   "action": proposition.action, "titre": proposition.titre},
+        source="autopilote" if decideur == "autopilote" else "superviseur",
+        canal=canal,
+        identite=identite or ("console-web" if canal == "web" else None),
+        resultat=proposition.resultat,
+    )
     broadcast_service.diffuser(
         {"type": "agent_proposal_update", "proposal": serialiser_proposition(proposition)}
     )
@@ -646,11 +781,48 @@ def decider(db: Session, proposition_id: int, *, approuver: bool) -> AgentPropos
 # --------------------------------------------------------------------------- #
 
 
-def _tick_superviseur() -> list[dict]:
-    """Un passage de détection (exécuté dans un thread — session propre)."""
+def _executer_autopilote_echus(db: Session) -> list[AgentProposal]:
+    """Exécute les propositions dont le compte à rebours autopilote (risque
+    MOYEN) est écoulé et qui sont ENCORE en attente — l'opérateur n'a rejeté ni
+    approuvé entre-temps, sinon leur statut ne serait plus PROPOSEE."""
+    maintenant = datetime.utcnow()
+    echues = db.execute(
+        select(AgentProposal).where(
+            AgentProposal.statut == StatutProposition.PROPOSEE,
+            AgentProposal.execution_auto_at.is_not(None),
+            AgentProposal.execution_auto_at <= maintenant,
+        )
+    ).scalars().all()
+    executees: list[AgentProposal] = []
+    for p in echues:
+        try:
+            executees.append(
+                decider(
+                    db, p.id, approuver=True, canal="systeme",
+                    identite="autopilote", decideur="autopilote",
+                )
+            )
+        except AppError:
+            logger.exception("autopilote_execution_echouee", proposition_id=p.id)
+    return executees
+
+
+def _tick_superviseur() -> tuple[list[dict], list[dict]]:
+    """Un passage de détection (exécuté dans un thread — session propre).
+
+    Renvoie (nouvelles, échues) : `nouvelles` sont les propositions créées ce
+    tick (certaines déjà EXECUTEE si le risque FAIBLE les a fait auto-exécuter
+    à la création — voir `_appliquer_autonomie`) ; `echues` sont des
+    propositions MOYEN créées lors d'un tick précédent dont le compte à rebours
+    autopilote vient de s'écouler.
+    """
     with session_scope() as db:
         nouvelles = analyser(db)
-        return [serialiser_proposition(p) for p in nouvelles]
+        echues = _executer_autopilote_echus(db)
+        return (
+            [serialiser_proposition(p) for p in nouvelles],
+            [serialiser_proposition(p) for p in echues],
+        )
 
 
 async def boucle_superviseur(intervalle_s: float = INTERVALLE_BOUCLE_S) -> None:
@@ -662,12 +834,25 @@ async def boucle_superviseur(intervalle_s: float = INTERVALLE_BOUCLE_S) -> None:
 
     while True:
         try:
-            nouvelles = await asyncio.to_thread(_tick_superviseur)
+            nouvelles, echues = await asyncio.to_thread(_tick_superviseur)
             for proposition in nouvelles:
                 await manager.broadcast({"type": "agent_proposal", "proposal": proposition})
-                # Nova proactive : la proposition part aussi sur WhatsApp
-                # (SUPERVISOR_NOTIFY_NUMBERS) — l'opérateur répond oui/non.
-                await asyncio.to_thread(proactive_service.notifier_proposition, proposition)
+                if proposition["statut"] == "PROPOSEE":
+                    # Nova proactive : la proposition part aussi sur WhatsApp
+                    # (SUPERVISOR_NOTIFY_NUMBERS) — l'opérateur répond oui/non.
+                    await asyncio.to_thread(proactive_service.notifier_proposition, proposition)
+                else:
+                    # Risque FAIBLE en mode assisté/autopilote : exécutée seule
+                    # dès sa création — notification informative, pas de
+                    # demande de décision.
+                    await asyncio.to_thread(
+                        proactive_service.notifier_execution_autonome, proposition
+                    )
+            for proposition in echues:
+                # `decider` (appelé par `_executer_autopilote_echus`) a déjà
+                # diffusé la mise à jour WebSocket : reste la notification
+                # WhatsApp « Nova a agi seule ».
+                await asyncio.to_thread(proactive_service.notifier_execution_autonome, proposition)
         except asyncio.CancelledError:
             logger.info("superviseur_arrete")
             raise

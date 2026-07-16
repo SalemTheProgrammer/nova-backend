@@ -29,6 +29,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.db.session import init_db
 
     init_db()
+    # Crée/promeut le numéro administrateur (accès total + page d'admin).
+    from app.services.auth_service import seed_admin
+
+    seed_admin()
     # Best-effort: ensure the Pinecone index exists. Non-fatal if it cannot run
     # (e.g. missing credentials in local dev) so the app can still boot.
     try:

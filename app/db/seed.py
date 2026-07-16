@@ -88,22 +88,27 @@ def seed() -> None:
             "API": MatierePremiere(
                 code="MP-API", designation="Paracétamol (principe actif)",
                 unite=Unite.G, seuil_alerte=Decimal("500"),
+                prix_unitaire_tnd=Decimal("0.1500"),  # TND / g
             ),
             "AMIDON": MatierePremiere(
                 code="MP-AMIDON", designation="Amidon de maïs",
                 unite=Unite.G, seuil_alerte=Decimal("300"),
+                prix_unitaire_tnd=Decimal("0.0060"),  # TND / g
             ),
             "STEAR": MatierePremiere(
                 code="MP-STEAR", designation="Stéarate de magnésium",
                 unite=Unite.G, seuil_alerte=Decimal("100"),
+                prix_unitaire_tnd=Decimal("0.0250"),  # TND / g
             ),
             "BLISTER": MatierePremiere(
                 code="MP-BLISTER", designation="Blister PVC/Alu (plaquette x16)",
                 unite=Unite.UN, seuil_alerte=Decimal("1000"),
+                prix_unitaire_tnd=Decimal("0.0900"),  # TND / blister
             ),
             "ETUI": MatierePremiere(
                 code="MP-ETUI", designation="Étui carton + notice",
                 unite=Unite.UN, seuil_alerte=Decimal("1000"),
+                prix_unitaire_tnd=Decimal("0.1400"),  # TND / étui
             ),
         }
         for mp in mps.values():
@@ -158,6 +163,7 @@ def seed() -> None:
             designation="Paracétamol 500 mg - Comprimés (boîte de 16)",
             unite=Unite.UN, type=TypeArticle.PF, actif=True,
             temps_cycle_cible_s=Decimal("4.0"),
+            valeur_unitaire=Decimal("3.400"),  # TND / boîte
         )
         db.add(article)
         db.flush()

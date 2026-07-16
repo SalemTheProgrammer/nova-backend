@@ -33,6 +33,11 @@ class Machine(Base, TimestampMixin):
     )
     temps_cycle_cible_s: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
     temps_cycle_actuel_s: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # Coût d'immobilisation de la machine (TND/heure) : main-d'œuvre, énergie,
+    # amortissement. Utilisé pour chiffrer les arrêts en dinars.
+    cout_horaire: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), default=Decimal("150.00"), nullable=False
+    )
     quantite_produite: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     quantite_bonne: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     quantite_rejetee: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

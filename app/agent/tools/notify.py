@@ -33,6 +33,20 @@ def _demande_confirmation(libelle: str) -> tuple[str, dict]:
     )
 
 
+def _destinataire_canonique(canal: str, destinataire: str) -> str:
+    """Forme canonique du destinataire pour la signature du garde-fou :
+    « +216 12 345 678 » à la proposition et « +21612345678 » à la confirmation
+    doivent matcher. Un numéro invalide est renvoyé tel quel — l'envoi lèvera
+    l'erreur explicite au moment voulu."""
+    d = destinataire.strip()
+    if canal == "whatsapp":
+        try:
+            return notify_service.normaliser_numero(d)
+        except AppError:
+            return d
+    return d.lower()
+
+
 def _envoyer(
     canal: str,
     destinataire: str,
@@ -68,20 +82,27 @@ def envoyer_rapport(
     """
     if canal not in CANAUX:
         return f"Canal invalide : {canal!r}. Utilisez \"email\" ou \"whatsapp\".", None
-    libelle = f"envoyer le bilan{f' de l’OF {of_numero}' if of_numero else ''} par {canal} à {destinataire}"
-    if not confirmation_gate.evaluer(
-        config,
-        "envoyer_rapport",
-        {"canal": canal, "destinataire": destinataire, "of_numero": of_numero},
-        confirmation,
-    ):
-        return _demande_confirmation(libelle)
+    destinataire = _destinataire_canonique(canal, destinataire)
     horodatage = f"{datetime.now():%d/%m/%Y %H:%M}"
     with session_scope() as db:
+        of = None
         if of_numero:
             of = _trouver_of(db, of_numero)
             if of is None:
                 return f"OF introuvable : {of_numero}", None
+        libelle = (
+            f"envoyer le bilan{f' de l’OF {of.numero}' if of else ''} "
+            f"par {canal} à {destinataire}"
+        )
+        if not confirmation_gate.evaluer(
+            config,
+            "envoyer_rapport",
+            {"canal": canal, "destinataire": destinataire,
+             "of_id": of.id if of else None},
+            confirmation,
+        ):
+            return _demande_confirmation(libelle)
+        if of is not None:
             pdf = pdf_service.generer_bilan_of_pdf(db, of)
             nom_fichier = f"bilan-of-{of.numero.replace('/', '-')}.pdf"
             sujet = f"Bilan OF {of.numero} — {horodatage}"
@@ -118,6 +139,7 @@ def envoyer_message(
         return f"Canal invalide : {canal!r}. Utilisez \"email\" ou \"whatsapp\".", None
     if not contenu.strip():
         return "Le contenu du message est vide.", None
+    destinataire = _destinataire_canonique(canal, destinataire)
     libelle = f"envoyer « {contenu.strip()[:80]} » par {canal} à {destinataire}"
     if not confirmation_gate.evaluer(
         config,
@@ -152,6 +174,7 @@ def envoyer_document(
     """
     if canal not in CANAUX:
         return f"Canal invalide : {canal!r}. Utilisez \"email\" ou \"whatsapp\".", None
+    destinataire = _destinataire_canonique(canal, destinataire)
     with session_scope() as db:
         document = document_files.trouver_document(db, nom_document)
         if document is None:

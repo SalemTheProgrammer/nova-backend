@@ -10,7 +10,8 @@ from sqlalchemy import select
 
 from app.db.session import session_scope
 from app.models import Alert, DowntimeEvent, Machine, OrdreFabrication
-from app.services import trs_service
+from app.models.referentiel import LigneProduction
+from app.services import cost_service, trs_service
 
 _LIBELLE_PERTE = {
     "disponibilite": "la disponibilité",
@@ -65,6 +66,14 @@ def etat_machine(code_ou_id: str) -> tuple[str, dict | None]:
             "quantite_rejetee": machine.quantite_rejetee,
         }
         if machine.temps_cycle_cible_s:
+            cadence_nominale = 3600 / float(machine.temps_cycle_cible_s)
+            lignes.append(
+                f"Cadence nominale : {cadence_nominale:.0f} u/h "
+                f"(temps de cycle cible {float(machine.temps_cycle_cible_s):g} s) — "
+                f"valeur théorique, indépendante de l'état courant de la machine"
+            )
+            artifact["cadence_nominale_u_h"] = round(cadence_nominale, 1)
+            artifact["temps_cycle_cible_s"] = float(machine.temps_cycle_cible_s)
             r = trs_service.calculer_trs_machine(db, machine)
             lignes.append(
                 f"TRS : {r.trs * 100:.0f}% (TQ {r.tq * 100:.0f}% / TP {r.tp * 100:.0f}% / "
@@ -80,6 +89,96 @@ def etat_machine(code_ou_id: str) -> tuple[str, dict | None]:
                 }
             )
         return "\n".join(lignes), artifact
+
+
+@tool(response_format="content_and_artifact")
+def etat_ligne(code_ou_id: str) -> tuple[str, dict | None]:
+    """Donne l'état courant de TOUTES les machines d'une ligne de production
+    (statut, OF actif, production par machine).
+
+    `code_ou_id` accepte le code de la ligne (ex. 'LIGNE-COMP-03') ou son id
+    numérique — PAS un code machine. À utiliser quand l'opérateur demande ce
+    qui tourne / l'état sur une LIGNE (par opposition à `etat_machine`, qui
+    ne connaît que les codes machine comme 'M-01').
+    """
+    with session_scope() as db:
+        ligne: LigneProduction | None = None
+        if code_ou_id.isdigit():
+            ligne = db.get(LigneProduction, int(code_ou_id))
+        if ligne is None:
+            ligne = db.execute(
+                select(LigneProduction).where(LigneProduction.code == code_ou_id)
+            ).scalars().first()
+        if ligne is None:
+            return f"Ligne introuvable : {code_ou_id}", None
+
+        machines = list(
+            db.execute(
+                select(Machine).where(Machine.ligne_production_id == ligne.id)
+            ).scalars()
+        )
+        if not machines:
+            return f"Aucune machine rattachée à la ligne {ligne.code}.", None
+
+        lignes_txt = [f"Ligne {ligne.code} ({ligne.designation}) :"]
+        machines_artifact = []
+        cadences_nominales: list[float] = []
+        for m in machines:
+            of_actif = m.ordre_fabrication.numero if m.ordre_fabrication else None
+            cadence_nominale = (
+                3600 / float(m.temps_cycle_cible_s) if m.temps_cycle_cible_s else None
+            )
+            if cadence_nominale is not None:
+                cadences_nominales.append(cadence_nominale)
+            cadence_txt = (
+                f" | cadence nominale {cadence_nominale:.0f} u/h"
+                if cadence_nominale is not None
+                else ""
+            )
+            lignes_txt.append(
+                f"- {m.code} ({m.nom}) : statut {m.statut.value} | OF actif : "
+                f"{of_actif or 'aucun'} | production {m.quantite_produite} unités "
+                f"({m.quantite_bonne} bonnes, {m.quantite_rejetee} rebuts){cadence_txt}"
+            )
+            machines_artifact.append(
+                {
+                    "machine_id": m.id,
+                    "code": m.code,
+                    "nom": m.nom,
+                    "statut": m.statut.value,
+                    "of_actif": of_actif,
+                    "quantite_produite": m.quantite_produite,
+                    "quantite_bonne": m.quantite_bonne,
+                    "quantite_rejetee": m.quantite_rejetee,
+                    "cadence_nominale_u_h": (
+                        round(cadence_nominale, 1) if cadence_nominale is not None else None
+                    ),
+                    "temps_cycle_cible_s": (
+                        float(m.temps_cycle_cible_s) if m.temps_cycle_cible_s else None
+                    ),
+                }
+            )
+
+        # Ligne série (poste → poste) : la cadence nominale de la ligne est
+        # celle du poste le plus lent (goulot), pas la somme des postes.
+        cadence_ligne = min(cadences_nominales) if cadences_nominales else None
+        if cadence_ligne is not None:
+            lignes_txt.append(
+                f"Cadence nominale de la ligne (goulot) : {cadence_ligne:.0f} u/h — "
+                f"valeur théorique, indépendante de l'état courant des machines"
+            )
+
+        artifact = {
+            "kind": "ligne",
+            "ligne_id": ligne.id,
+            "code": ligne.code,
+            "designation": ligne.designation,
+            "cadence_nominale_ligne_u_h": (
+                round(cadence_ligne, 1) if cadence_ligne is not None else None
+            ),
+            "machines": machines_artifact,
+        }
+        return "\n".join(lignes_txt), artifact
 
 
 @tool(response_format="content_and_artifact")
@@ -182,4 +281,23 @@ def alertes_actives() -> str:
         return "\n".join(f"- [{a.severity.value}] {a.message}" for a in alertes)
 
 
-MES_TOOLS = [etat_machine, resume_trs, arrets_actifs, alertes_actives]
+@tool(response_format="content_and_artifact")
+def calculer_cout_of(of_numero: str) -> tuple[str, dict | None]:
+    """Chiffre le coût de production d'un OF (matières + immobilisation machine, en TND).
+
+    `of_numero` : numéro d'OF (ex. 'OF-2026-00015', accepte aussi un id numérique).
+    Décompose en coût matières (généalogie de consommation FEFO × prix unitaire
+    des MP) et coût d'immobilisation machine (durée réelle × coût horaire), plus
+    la perte valorisée des rebuts à part. Chiffre ce qui est chiffrable et
+    signale ce qui ne l'est pas (prix MP ou valeur article manquants) — ne
+    devine jamais un montant.
+    """
+    with session_scope() as db:
+        of = _trouver_of(db, of_numero)
+        if of is None:
+            return f"OF introuvable : {of_numero}.", None
+        c = cost_service.calculer_cout_of(db, of)
+        return c.resume(), c.artifact()
+
+
+MES_TOOLS = [etat_machine, etat_ligne, resume_trs, calculer_cout_of, arrets_actifs, alertes_actives]

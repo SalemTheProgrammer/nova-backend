@@ -127,50 +127,62 @@ def seed() -> None:
             "PARA-API": MatierePremiere(
                 code="MP-PARA-API", designation="Paracétamol (principe actif, lot 2)",
                 unite=Unite.G, seuil_alerte=Decimal("50000"),
+                prix_unitaire_tnd=Decimal("0.1500"),
             ),
             "IBU": MatierePremiere(
                 code="MP-IBU", designation="Ibuprofène (principe actif)",
                 unite=Unite.G, seuil_alerte=Decimal("50000"),
+                prix_unitaire_tnd=Decimal("0.1200"),
             ),
             "ASPIRINE": MatierePremiere(
                 code="MP-ASPIRINE", designation="Acide acétylsalicylique (principe actif)",
                 unite=Unite.G, seuil_alerte=Decimal("50000"),
+                prix_unitaire_tnd=Decimal("0.0400"),
             ),
             "AMOX": MatierePremiere(
                 code="MP-AMOX", designation="Amoxicilline trihydratée (principe actif)",
                 unite=Unite.G, seuil_alerte=Decimal("30000"),
+                prix_unitaire_tnd=Decimal("0.6000"),
             ),
             "LACTOSE": MatierePremiere(
                 code="MP-LACTOSE", designation="Lactose monohydraté (excipient)",
                 unite=Unite.G, seuil_alerte=Decimal("100000"),
+                prix_unitaire_tnd=Decimal("0.0040"),
             ),
             "CELLULOSE": MatierePremiere(
                 code="MP-CELLULOSE", designation="Cellulose microcristalline (excipient)",
                 unite=Unite.G, seuil_alerte=Decimal("80000"),
+                prix_unitaire_tnd=Decimal("0.0060"),
             ),
             "GELCAPS": MatierePremiere(
                 code="MP-GELCAPS", designation="Capsules gélatine vides",
                 unite=Unite.UN, seuil_alerte=Decimal("20000"),
+                prix_unitaire_tnd=Decimal("0.0700"),
             ),
             "SIROP-BASE": MatierePremiere(
                 code="MP-SIROP-BASE", designation="Sirop de base sucré",
                 unite=Unite.L, seuil_alerte=Decimal("200"),
+                prix_unitaire_tnd=Decimal("2.5000"),
             ),
             "AROME": MatierePremiere(
                 code="MP-AROME-FRAISE", designation="Arôme fraise",
                 unite=Unite.ML, seuil_alerte=Decimal("5000"),
+                prix_unitaire_tnd=Decimal("0.0500"),
             ),
             "FLACON": MatierePremiere(
                 code="MP-FLACON100", designation="Flacon PET 100 ml",
                 unite=Unite.UN, seuil_alerte=Decimal("5000"),
+                prix_unitaire_tnd=Decimal("0.3000"),
             ),
             "BLISTER-R": MatierePremiere(
                 code="MP-BLISTER-R", designation="Blister PVC/Alu (plaquette)",
                 unite=Unite.UN, seuil_alerte=Decimal("10000"),
+                prix_unitaire_tnd=Decimal("0.0900"),
             ),
             "ETUI-R": MatierePremiere(
                 code="MP-ETUI-R", designation="Étui carton + notice",
                 unite=Unite.UN, seuil_alerte=Decimal("10000"),
+                prix_unitaire_tnd=Decimal("0.1400"),
             ),
         }
         for mp in mp_riche.values():
@@ -246,26 +258,32 @@ def seed() -> None:
             "VITC": MatierePremiere(
                 code="MP-VITC", designation="Vitamine C (acide ascorbique)",
                 unite=Unite.G, seuil_alerte=Decimal("20000"),
+                prix_unitaire_tnd=Decimal("0.0800"),
             ),
             "TALC": MatierePremiere(
                 code="MP-TALC", designation="Talc pharmaceutique",
                 unite=Unite.G, seuil_alerte=Decimal("15000"),
+                prix_unitaire_tnd=Decimal("0.0100"),
             ),
             "GELULE-VIDE": MatierePremiere(
                 code="MP-GELULE-VIDE", designation="Gélules vides",
                 unite=Unite.UN, seuil_alerte=Decimal("10000"),
+                prix_unitaire_tnd=Decimal("0.0600"),
             ),
             "SACHET": MatierePremiere(
                 code="MP-SACHET-ALU", designation="Sachet aluminium thermosoudable",
                 unite=Unite.UN, seuil_alerte=Decimal("10000"),
+                prix_unitaire_tnd=Decimal("0.0700"),
             ),
             "COLORANT": MatierePremiere(
                 code="MP-COLORANT", designation="Colorant alimentaire",
                 unite=Unite.ML, seuil_alerte=Decimal("2000"),
+                prix_unitaire_tnd=Decimal("0.0300"),
             ),
             "CREME-BASE": MatierePremiere(
                 code="MP-CREME-BASE", designation="Base crème dermatologique",
                 unite=Unite.KG, seuil_alerte=Decimal("50"),
+                prix_unitaire_tnd=Decimal("12.0000"),
             ),
         }
         for mp in mp_pauvre.values():
@@ -517,6 +535,20 @@ def seed() -> None:
         )
         db.flush()
 
+        # Valeur commerciale unitaire (TND) — sert au chiffrage en dinars des
+        # arrêts et scénarios what-if (voir services/cost_service.py).
+        valeurs_unitaires = {
+            "IBU400": "4.800", "PARA1000": "3.200", "ASPIRINE500": "4.100",
+            "AMOX500": "7.500", "MULTIVIT-GEL": "9.800", "VITC-SIROP": "6.400",
+            "TOUX-SIROP": "7.200", "PARA-SIROP": "5.900", "VITC1000": "5.500",
+            "TALC-POUDRE": "3.000", "GELULE-VIDE-BTE": "2.500",
+            "CREME-DERM": "8.500", "SACHET-EFFER": "1.900", "POUDRE-BEBE": "4.300",
+        }
+        for article in list(articles_riche.values()) + list(articles_pauvre.values()):
+            valeur = valeurs_unitaires.get(article.code)
+            article.valeur_unitaire = Decimal(valeur) if valeur else Decimal("4.000")
+        db.flush()
+
         # ------------------------------------------------------------------
         # Machines — 2 sur la ligne riche (tournent bien), 2 sur la pauvre
         # (à l'arrêt / en panne, faute de matière).
@@ -524,16 +556,16 @@ def seed() -> None:
         machines_spec = [
             dict(code="M-07", nom="Comprimeuse rotative 2", ligne=ligne_riche, cycle=3.5,
                  statut=StatutMachine.MARCHE, trs=0.88, tq=0.97, do=1.0,
-                 cause_arret=CauseArret.MICRO_ARRET),
+                 cause_arret=CauseArret.MICRO_ARRET, cout_horaire="220"),
             dict(code="M-08", nom="Remplisseuse sirop 1", ligne=ligne_riche, cycle=2.8,
                  statut=StatutMachine.MARCHE, trs=0.80, tq=0.95, do=0.97,
-                 cause_arret=CauseArret.CHANGEMENT_SERIE),
+                 cause_arret=CauseArret.CHANGEMENT_SERIE, cout_horaire="180"),
             dict(code="M-09", nom="Doseuse poudre 1", ligne=ligne_pauvre, cycle=4.5,
                  statut=StatutMachine.ARRET, trs=0.15, tq=0.85, do=0.25,
-                 cause_arret=CauseArret.ATTENTE_MATIERE),
+                 cause_arret=CauseArret.ATTENTE_MATIERE, cout_horaire="140"),
             dict(code="M-10", nom="Conditionneuse sachets 1", ligne=ligne_pauvre, cycle=4.0,
                  statut=StatutMachine.PANNE, trs=0.05, tq=0.70, do=0.10,
-                 cause_arret=CauseArret.ATTENTE_MATIERE),
+                 cause_arret=CauseArret.ATTENTE_MATIERE, cout_horaire="160"),
         ]
         machines = {}
         for spec in machines_spec:
@@ -543,6 +575,7 @@ def seed() -> None:
             machine = Machine(
                 code=spec["code"], nom=spec["nom"], ligne_production_id=spec["ligne"].id,
                 statut=spec["statut"], temps_cycle_cible_s=Decimal(str(spec["cycle"])),
+                cout_horaire=Decimal(spec["cout_horaire"]),
                 dernier_evenement_at=maintenant,
             )
             db.add(machine)

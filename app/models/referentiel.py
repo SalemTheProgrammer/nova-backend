@@ -47,6 +47,9 @@ class Article(Base, TimestampMixin):
     actif: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     # Temps de cycle standard (secondes/unité), utilisé pour le calcul du TRS (TN, TP).
     temps_cycle_cible_s: Mapped[Decimal | None] = mapped_column(Numeric(10, 2), nullable=True)
+    # Valeur commerciale d'une unité produite (TND) : sert à chiffrer en dinars
+    # la production perdue lors d'un arrêt (what-if, superviseur, rapports).
+    valeur_unitaire: Mapped[Decimal | None] = mapped_column(Numeric(10, 3), nullable=True)
 
     nomenclatures: Mapped[list["Nomenclature"]] = relationship(
         back_populates="article", cascade="all, delete-orphan"
@@ -64,6 +67,9 @@ class MatierePremiere(Base, TimestampMixin):
     unite: Mapped[Unite] = mapped_column(SAEnum(Unite), default=Unite.KG, nullable=False)
     seuil_alerte: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), nullable=True)
     actif: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    # Prix d'achat unitaire (TND / unité de `unite`) : sert à chiffrer le coût
+    # matières d'un OF à partir de sa généalogie de consommation (FEFO).
+    prix_unitaire_tnd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4), nullable=True)
 
     lots: Mapped[list["LotMatierePremiere"]] = relationship(  # noqa: F821
         back_populates="matiere_premiere"

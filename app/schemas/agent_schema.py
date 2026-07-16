@@ -20,3 +20,15 @@ class AgentProposalRead(BaseModel):
     resultat: str | None
     created_at: datetime
     decided_at: datetime | None
+    decideur: str
+    execution_auto_at: datetime | None
+    risque: str
+
+
+class AutonomieRead(BaseModel):
+    mode: str
+    delai_moyen_s: int
+
+
+class AutonomieUpdate(BaseModel):
+    mode: str

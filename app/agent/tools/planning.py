@@ -16,7 +16,12 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from app.agent.tools import confirmation_gate
-from app.agent.tools.notify import CANAUX, _demande_confirmation, _envoyer
+from app.agent.tools.notify import (
+    CANAUX,
+    _demande_confirmation,
+    _destinataire_canonique,
+    _envoyer,
+)
 from app.core.exceptions import AppError
 from app.db.session import session_scope
 from app.services import broadcast_service, pdf_service, planning_service
@@ -307,6 +312,7 @@ def envoyer_ordonnancement(
     if algo not in planning_service.ALGORITHMES:
         return f"❌ Règle inconnue : {algorithme!r}. Disponibles : {_REGLES}.", None
 
+    destinataire = _destinataire_canonique(canal, destinataire)
     prioritaires = _prioritaires(of_prioritaires)
     libelle = f"envoyer le plan d'ordonnancement {algo} (PDF + message) par {canal} à {destinataire}"
     if not confirmation_gate.evaluer(

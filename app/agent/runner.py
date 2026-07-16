@@ -16,21 +16,40 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
-async def run_agent(message: str, *, thread_id: str, mode: str = "texte") -> str:
-    """Run the agent for a single user message within a conversation thread.
+def _build_config(thread_id: str, outils_autorises: list[str] | None) -> dict:
+    """Config d'exécution du graphe : thread, invocation, et périmètre d'outils.
 
-    `thread_id` keys the checkpointer so multi-turn conversations retain memory.
+    `outils_autorises=None` = tous les outils (admin / appel interne) ; une liste
+    restreint le modèle (bind_tools) et le garde-fou d'exécution à ces outils.
     """
     settings = get_settings()
-    graph = get_compiled_graph()
-    config = {
+    return {
         # `invocation_id` change à chaque appel : c'est ce qui permet au garde-fou
         # de confirmation (voir `agent/tools/confirmation_gate.py`) de distinguer
         # « le modèle se re-confirme lui-même dans la même boucle » d'un vrai
         # aller-retour avec l'opérateur (message suivant = invocation différente).
-        "configurable": {"thread_id": thread_id, "invocation_id": str(uuid.uuid4())},
+        "configurable": {
+            "thread_id": thread_id,
+            "invocation_id": str(uuid.uuid4()),
+            "outils_autorises": outils_autorises,
+        },
         "recursion_limit": settings.agent_recursion_limit,
     }
+
+
+async def run_agent(
+    message: str,
+    *,
+    thread_id: str,
+    mode: str = "texte",
+    outils_autorises: list[str] | None = None,
+) -> str:
+    """Run the agent for a single user message within a conversation thread.
+
+    `thread_id` keys the checkpointer so multi-turn conversations retain memory.
+    """
+    graph = get_compiled_graph()
+    config = _build_config(thread_id, outils_autorises)
     try:
         result = await graph.ainvoke(
             {"messages": [HumanMessage(content=message)], "mode": mode},
@@ -48,7 +67,11 @@ async def run_agent(message: str, *, thread_id: str, mode: str = "texte") -> str
 
 
 async def run_agent_avec_artifacts(
-    message: str, *, thread_id: str, mode: str = "texte"
+    message: str,
+    *,
+    thread_id: str,
+    mode: str = "texte",
+    outils_autorises: list[str] | None = None,
 ) -> tuple[str, list[dict]]:
     """Comme `run_agent`, mais renvoie aussi les artifacts produits PENDANT CE
     TOUR (graphiques, jauges…) pour les canaux qui doivent les rendre eux-mêmes
@@ -58,12 +81,8 @@ async def run_agent_avec_artifacts(
     checkpointer rejoue tout l'historique du thread, on ne veut pas renvoyer
     les graphiques des tours précédents.
     """
-    settings = get_settings()
     graph = get_compiled_graph()
-    config = {
-        "configurable": {"thread_id": thread_id, "invocation_id": str(uuid.uuid4())},
-        "recursion_limit": settings.agent_recursion_limit,
-    }
+    config = _build_config(thread_id, outils_autorises)
     try:
         result = await graph.ainvoke(
             {"messages": [HumanMessage(content=message)], "mode": mode},
@@ -161,7 +180,13 @@ def _chunk_text(chunk: Any) -> str:
     return ""
 
 
-async def stream_agent(message: str, *, thread_id: str, mode: str = "texte") -> AsyncIterator[dict]:
+async def stream_agent(
+    message: str,
+    *,
+    thread_id: str,
+    mode: str = "texte",
+    outils_autorises: list[str] | None = None,
+) -> AsyncIterator[dict]:
     """Run the agent and yield UI-oriented events (tokens, tool steps, artifacts).
 
     Event types:
@@ -181,12 +206,8 @@ async def stream_agent(message: str, *, thread_id: str, mode: str = "texte") -> 
     navigation event is emitted so the UI redirects reliably regardless of the
     model's own tool choice. Each page fires at most once per run.
     """
-    settings = get_settings()
     graph = get_compiled_graph()
-    config = {
-        "configurable": {"thread_id": thread_id, "invocation_id": str(uuid.uuid4())},
-        "recursion_limit": settings.agent_recursion_limit,
-    }
+    config = _build_config(thread_id, outils_autorises)
     final_text = ""
     pages_visitees: set[str] = set()
     try:

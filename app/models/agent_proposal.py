@@ -46,6 +46,14 @@ class AgentProposal(Base):
         DateTime, server_default=func.now(), index=True, nullable=False
     )
     decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Qui a décidé : "operateur" (bouton web, WhatsApp oui/non) ou "autopilote"
+    # (mode assisté/autopilote — voir supervisor_service._appliquer_autonomie).
+    decideur: Mapped[str] = mapped_column(String(20), default="operateur", nullable=False)
+    # Horodatage de l'exécution automatique programmée (mode autopilote, risque
+    # MOYEN uniquement) : la proposition reste PROPOSEE et décidable par
+    # l'opérateur jusqu'à cet instant, où le superviseur l'exécute lui-même si
+    # personne n'a tranché. None = pas de compte à rebours en cours.
+    execution_auto_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     machine: Mapped[Machine | None] = relationship()
     ordre_fabrication: Mapped[OrdreFabrication | None] = relationship()

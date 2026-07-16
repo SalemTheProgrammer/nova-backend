@@ -298,6 +298,73 @@ def consulter_ordre_fabrication(numero_ou_id: str) -> str:
         )
 
 
+@tool(response_format="content_and_artifact")
+def lister_ordres_par_quantite(
+    ligne_code_ou_id: str | None = None,
+    statut: str | None = None,
+    limite: int = 50,
+) -> tuple[str, dict | None]:
+    """Affiche les OF (numéro, article, quantité planifiée, statut) triés par
+    quantité décroissante (le plus gros en tête), dans un tableau HTML interactif.
+
+    À utiliser pour « quel est l'OF avec la plus grande quantité ? » ou pour
+    lister les OF d'un statut donné (ex. « montre-moi les OF planifiés ») — NE PAS
+    confondre avec la production déjà réalisée par une machine (quantite_produite) :
+    ceci lit la quantité PLANIFIÉE de chaque ordre de fabrication (table OF).
+
+    `ligne_code_ou_id` filtre sur une ligne (code ex. 'LIGNE-COMP-03' ou id
+    numérique) ; laisser vide pour chercher sur toute l'usine.
+    `statut` filtre optionnellement (ex. 'EN_COURS', 'PLANIFIE') ; laisser vide
+    pour tous statuts sauf ANNULE.
+
+    Ne recopie JAMAIS la liste des OF dans ta réponse texte : dis seulement que
+    le tableau est affiché (le widget montre déjà numéro, article, quantité et statut).
+    """
+    with session_scope() as db:
+        stmt = select(OrdreFabrication)
+
+        if ligne_code_ou_id:
+            ligne: LigneProduction | None = None
+            if ligne_code_ou_id.isdigit():
+                ligne = db.get(LigneProduction, int(ligne_code_ou_id))
+            if ligne is None:
+                ligne = db.execute(
+                    select(LigneProduction).where(LigneProduction.code == ligne_code_ou_id)
+                ).scalars().first()
+            if ligne is None:
+                return f"Ligne introuvable : {ligne_code_ou_id}", None
+            stmt = stmt.where(OrdreFabrication.ligne_production_id == ligne.id)
+
+        if statut:
+            stmt = stmt.where(OrdreFabrication.statut == statut.upper())
+        else:
+            stmt = stmt.where(OrdreFabrication.statut != "ANNULE")
+
+        ofs = db.execute(
+            stmt.order_by(OrdreFabrication.quantite_planifiee.desc()).limit(max(1, limite))
+        ).scalars().all()
+
+        if not ofs:
+            portee = f" sur {ligne_code_ou_id}" if ligne_code_ou_id else ""
+            return f"Aucun OF trouvé{portee}.", None
+
+        artifact = {
+            "kind": "ordres_liste",
+            "ordres": [
+                {
+                    "numero": of.numero,
+                    "article_code": of.article.code,
+                    "article_designation": of.article.designation,
+                    "quantite": str(of.quantite_planifiee),
+                    "unite": of.unite.value,
+                    "statut": of.statut.value,
+                }
+                for of in ofs
+            ],
+        }
+        return f"{len(ofs)} OF affichés dans le tableau, triés par quantité décroissante.", artifact
+
+
 MANUFACTURING_TOOLS = [
     lister_articles,
     rechercher_article,
@@ -306,4 +373,5 @@ MANUFACTURING_TOOLS = [
     etat_stock_matiere,
     creer_ordre_fabrication,
     consulter_ordre_fabrication,
+    lister_ordres_par_quantite,
 ]

@@ -37,6 +37,17 @@ class Settings(BaseSettings):
     )
     api_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
+    # Authentification par numéro de téléphone (code de vérification WhatsApp).
+    # AUTH_SECRET signe les jetons de session (HMAC) — À CHANGER en production.
+    auth_secret: str = "change-me-in-production-nova-auth-secret"
+    # Durée de validité d'un jeton de session (7 jours par défaut).
+    auth_token_ttl_s: int = 604800
+    # Durée de validité d'un code de vérification (5 minutes).
+    verification_code_ttl_s: int = 300
+    # Numéro administrateur : accès à tous les outils + page d'administration.
+    # Créé/mis à jour automatiquement au démarrage (voir auth_service.seed_admin).
+    admin_phone: str = "+21655516823"
+
     # LLM
     openai_api_key: str = ""
     llm_model: str = "gpt-5.4-nano"
@@ -53,10 +64,23 @@ class Settings(BaseSettings):
     # Superviseur autonome / simulation
     supervisor_enabled: bool = True
     auto_sim_autostart: bool = False
+    # Autonomie du superviseur : "manuel" (comportement historique, tout attend
+    # l'opérateur), "assiste" (risque FAIBLE exécuté seul, immédiatement),
+    # "autopilote" (idem + risque MOYEN exécuté seul après un délai, sauf rejet
+    # explicite avant l'échéance). Modifiable en runtime via
+    # POST /api/v1/agent/autonomie (voir supervisor_service.definir_mode_autonomie) —
+    # ce réglage n'est que la valeur de démarrage.
+    autonomy_mode_defaut: Literal["manuel", "assiste", "autopilote"] = "manuel"
+    # Délai (secondes) avant l'exécution automatique d'une proposition à risque
+    # MOYEN en mode "autopilote" — le temps pour l'opérateur de dire non.
+    autopilote_delai_moyen_s: int = 45
     # Nova proactive : les propositions du superviseur partent aussi par WhatsApp
     # vers ces numéros (CSV) ; l'opérateur répond oui/non depuis son téléphone.
     supervisor_notify_numbers: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    supervisor_notify_critical_only: bool = True
+    # False par défaut : toutes les propositions (dérive qualité, stock bas,
+    # retard prévisionnel…) partent sur WhatsApp, pas seulement les CRITICAL —
+    # c'est le comportement décrit dans NOVA-AI.md et attendu en démo.
+    supervisor_notify_critical_only: bool = False
 
     # Notifications sortantes (envoi du bilan / messages par Nova)
     # E-mail : n'importe quel SMTP (Gmail : smtp.gmail.com + mot de passe d'application).
@@ -95,7 +119,6 @@ class Settings(BaseSettings):
     pinecone_embedding_dimension: int = 1536
 
     # Agent
-    agent_max_iterations: int = 8
     agent_recursion_limit: int = 25
 
     @field_validator(

@@ -22,6 +22,7 @@ from app.models.enums import (
 )
 from app.models.agent_proposal import AgentProposal
 from app.models.alert import Alert
+from app.models.audit import AuditLog
 from app.models.envoi_planifie import EnvoiPlanifie
 from app.models.downtime_event import DowntimeEvent
 from app.models.fabrication import OFConsommationMP, OrdreFabrication
@@ -41,6 +42,8 @@ from app.models.referentiel import (
     ligne_article,
 )
 from app.models.stock import LotMatierePremiere, MouvementStock
+from app.models.utilisateur import Utilisateur
+from app.models.code_verification import CodeVerification
 
 __all__ = [
     # enums
@@ -85,4 +88,9 @@ __all__ = [
     "AgentProposal",
     # envois sortants programmés
     "EnvoiPlanifie",
+    # journal d'audit (BPF / Annexe 11)
+    "AuditLog",
+    # authentification par numéro + périmètre d'outils
+    "Utilisateur",
+    "CodeVerification",
 ]

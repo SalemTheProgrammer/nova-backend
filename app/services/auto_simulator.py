@@ -82,10 +82,12 @@ class AutoSimulator:
         logger.info("auto_simulator_demarre")
 
     def _amorcer(self) -> None:
-        """Redémarre toute machine active qui n'est pas déjà en marche.
+        """Redémarre toute machine ayant un OF actif qui n'est pas déjà en marche.
 
         Ferme les arrêts et maintenances encore ouverts puis repasse la machine en
         MARCHE — la ligne repart proprement et rien ne reste figé d'un run précédent.
+        Une machine sans OF assigné n'a rien à produire : elle reste à l'arrêt
+        (sinon on affiche un statut MARCHE incohérent avec « OF actif : aucun »).
         """
         with session_scope() as db:
             machines = db.execute(
@@ -93,6 +95,8 @@ class AutoSimulator:
             ).scalars().all()
             for machine in machines:
                 if machine.statut == StatutMachine.MARCHE:
+                    continue
+                if machine.ordre_fabrication_id is None:
                     continue
                 for dt in db.execute(
                     select(DowntimeEvent).where(

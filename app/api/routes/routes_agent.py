@@ -1,15 +1,17 @@
 """Propositions du superviseur autonome : journal + décision opérateur."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
+from app.core.exceptions import AppError
 from app.core.security import require_api_key
 from app.db.session import get_db
 from app.models import AgentProposal
 from app.models.enums import StatutProposition
-from app.schemas.agent_schema import AgentProposalRead
+from app.schemas.agent_schema import AgentProposalRead, AutonomieRead, AutonomieUpdate
 from app.services import supervisor_service
 
 router = APIRouter(prefix="/agent", tags=["agent-superviseur"], dependencies=[Depends(require_api_key)])
@@ -30,6 +32,9 @@ def _lire(p: AgentProposal) -> AgentProposalRead:
         resultat=p.resultat,
         created_at=p.created_at,
         decided_at=p.decided_at,
+        decideur=p.decideur,
+        execution_auto_at=p.execution_auto_at,
+        risque=supervisor_service.RISQUE_PAR_TYPE.get(p.type, supervisor_service.RISQUE_MOYEN),
     )
 
 
@@ -53,3 +58,20 @@ def approuver(proposition_id: int, db: Session = Depends(get_db)) -> AgentPropos
 @router.post("/propositions/{proposition_id}/rejeter", response_model=AgentProposalRead)
 def rejeter(proposition_id: int, db: Session = Depends(get_db)) -> AgentProposalRead:
     return _lire(supervisor_service.decider(db, proposition_id, approuver=False))
+
+
+@router.get("/autonomie", response_model=AutonomieRead)
+def lire_autonomie() -> AutonomieRead:
+    return AutonomieRead(
+        mode=supervisor_service.mode_autonomie(),
+        delai_moyen_s=get_settings().autopilote_delai_moyen_s,
+    )
+
+
+@router.post("/autonomie", response_model=AutonomieRead)
+def definir_autonomie(payload: AutonomieUpdate) -> AutonomieRead:
+    try:
+        mode = supervisor_service.definir_mode_autonomie(payload.mode)
+    except AppError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, exc.message) from exc
+    return AutonomieRead(mode=mode, delai_moyen_s=get_settings().autopilote_delai_moyen_s)

@@ -119,4 +119,15 @@ def evaluer(
         return False
 
     propositions.pop(sig, None)
+    # Toute action irréversible/sortante autorisée passe par ici : c'est LE
+    # point unique où écrire le journal d'audit (attribution BPF / Annexe 11).
+    # Import tardif pour garder ce module sans dépendance au démarrage.
+    from app.services import audit_service
+
+    audit_service.enregistrer_action(
+        action=tool_name,
+        arguments=args_metier,
+        source="agent",
+        thread_id=str(thread_id),
+    )
     return True
