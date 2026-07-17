@@ -100,7 +100,7 @@ class PointOEE:
     disponibilite: Decimal
     performance: Decimal
     qualite: Decimal
-    trs: Decimal
+    trs: Decimal | None
 
 
 @dataclass
@@ -385,6 +385,12 @@ def construire_historique_oee(
         if fin <= debut:
             continue
         resultat = trs_service.calculer_trs_ligne(db, machines, depuis=debut, jusqua=fin)
+        # Aucun événement qualité dans ce bucket = pas de production observée,
+        # pas "0 % de TRS" : on distingue les deux pour ne pas afficher un
+        # plancher à 0 artificiel sur les buckets simplement vides.
+        a_des_donnees = resultat is not None and (
+            resultat.quantite_bonne + resultat.quantite_rejetee > 0
+        )
         points.append(
             PointOEE(
                 label=debut.strftime(fmt),
@@ -392,7 +398,7 @@ def construire_historique_oee(
                 disponibilite=resultat.do if resultat else Decimal("0"),
                 performance=resultat.tp if resultat else Decimal("0"),
                 qualite=resultat.tq if resultat else Decimal("0"),
-                trs=resultat.trs if resultat else Decimal("0"),
+                trs=resultat.trs if a_des_donnees else None,
             )
         )
     return points

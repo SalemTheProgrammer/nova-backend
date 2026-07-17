@@ -99,7 +99,7 @@ class PointOEERead(BaseModel):
     disponibilite: Decimal
     performance: Decimal
     qualite: Decimal
-    trs: Decimal
+    trs: Decimal | None
 
 
 class DashboardResumeRead(BaseModel):
