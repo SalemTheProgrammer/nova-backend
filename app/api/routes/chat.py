@@ -4,10 +4,10 @@ from __future__ import annotations
 import orjson
 from collections.abc import AsyncIterator
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 
-from app.agent.runner import get_thread_history, run_agent, stream_agent
+from app.agent.runner import delete_thread, get_thread_history, run_agent, stream_agent
 from app.core.security import get_current_user
 from app.models.utilisateur import Utilisateur
 from app.schemas.chat import ChatHistoryResponse, ChatRequest, ChatResponse
@@ -37,6 +37,13 @@ async def chat_history(
     après un refresh de page (voir `useAgentChat.ts`)."""
     turns = await get_thread_history(thread_id)
     return ChatHistoryResponse(thread_id=thread_id, turns=turns)
+
+
+@router.delete("/chat/{thread_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def chat_clear(thread_id: str, user: Utilisateur = Depends(get_current_user)) -> None:
+    """Efface définitivement l'historique d'un thread (bouton « effacer la
+    conversation » du panneau de chat)."""
+    await delete_thread(thread_id)
 
 
 def _sse(event: dict) -> str:

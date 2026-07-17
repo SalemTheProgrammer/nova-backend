@@ -110,6 +110,13 @@ async def run_agent_avec_artifacts(
     raise AgentError("Agent produced no response")
 
 
+async def delete_thread(thread_id: str) -> None:
+    """Efface définitivement l'historique d'un thread côté checkpointer, pour le
+    bouton « effacer la conversation » du panneau de chat."""
+    graph = get_compiled_graph()
+    await graph.checkpointer.adelete_thread(thread_id)
+
+
 async def get_thread_history(thread_id: str) -> list[dict]:
     """Reconstruit les tours UI (voir `AgentTurn`/`AgentSegment` côté frontend)
     depuis l'historique de messages du checkpointer pour `thread_id`, afin que
