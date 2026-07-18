@@ -1,6 +1,7 @@
 """TRS/TRG/TRE (AFNOR), résumé tableau de bord, et insights IA instantanés."""
 from __future__ import annotations
 
+import threading
 import time
 from datetime import datetime
 from typing import Literal
@@ -92,10 +93,14 @@ def trs(
 
 
 # Le résumé recompute le TRS de la fenêtre 8 h depuis les événements bruts à
-# chaque appel (~0,5-3 s) et chaque client ouvert le poll à ~1/s : un cache
-# court mutualise le calcul entre les clients sans staleness perceptible.
-_RESUME_CACHE_TTL_S = 2.0
+# chaque appel (~0,5-3 s sur la base prod) et chaque client ouvert le poll à
+# ~1/s : un cache court mutualise le calcul entre les clients. Le TTL court
+# (3 s) compte à partir de la FIN du calcul, sinon un calcul de 2 s expire
+# quasi immédiatement et le cache ne sert jamais. Le verrou évite la ruée :
+# pendant qu'un client calcule, les autres attendent puis lisent le cache.
+_RESUME_CACHE_TTL_S = 3.0
 _resume_cache: dict[int | None, tuple[float, DashboardResumeRead]] = {}
+_resume_lock = threading.Lock()
 # L'historique OEE recalcule le TRS de chaque bucket (7 jours / 30 jours) : le
 # plus lourd de tous les endpoints, pour une courbe qui ne bouge qu'à l'heure.
 _HISTORY_CACHE_TTL_S = 60.0
@@ -106,10 +111,17 @@ _history_cache: dict[tuple[int | None, str], tuple[float, list[PointOEERead]]] =
 def dashboard_resume(
     ligne_id: int | None = Query(default=None), db: Session = Depends(get_db)
 ) -> DashboardResumeRead:
-    now = time.monotonic()
     cached = _resume_cache.get(ligne_id)
-    if cached is not None and now - cached[0] < _RESUME_CACHE_TTL_S:
+    if cached is not None and time.monotonic() - cached[0] < _RESUME_CACHE_TTL_S:
         return cached[1]
+    with _resume_lock:
+        cached = _resume_cache.get(ligne_id)
+        if cached is not None and time.monotonic() - cached[0] < _RESUME_CACHE_TTL_S:
+            return cached[1]
+        return _construire_resume_lecture(db, ligne_id)
+
+
+def _construire_resume_lecture(db: Session, ligne_id: int | None) -> DashboardResumeRead:
     r = dashboard_service.construire_resume(db, ligne_id=ligne_id)
     lecture = DashboardResumeRead(
         trs_global=r.trs_global,
@@ -201,7 +213,7 @@ def dashboard_resume(
             for m in r.matieres_consommees
         ],
     )
-    _resume_cache[ligne_id] = (now, lecture)
+    _resume_cache[ligne_id] = (time.monotonic(), lecture)
     return lecture
 
 
@@ -211,9 +223,8 @@ def oee_history(
     periode: Literal["day", "week", "month"] = Query(default="week"),
     db: Session = Depends(get_db),
 ) -> list[PointOEERead]:
-    now = time.monotonic()
     cached = _history_cache.get((ligne_id, periode))
-    if cached is not None and now - cached[0] < _HISTORY_CACHE_TTL_S:
+    if cached is not None and time.monotonic() - cached[0] < _HISTORY_CACHE_TTL_S:
         return cached[1]
     points = dashboard_service.construire_historique_oee(db, ligne_id=ligne_id, periode=periode)
     lecture = [
@@ -227,7 +238,7 @@ def oee_history(
         )
         for p in points
     ]
-    _history_cache[(ligne_id, periode)] = (now, lecture)
+    _history_cache[(ligne_id, periode)] = (time.monotonic(), lecture)
     return lecture
 
 
