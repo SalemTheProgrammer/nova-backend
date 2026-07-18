@@ -1,6 +1,10 @@
-"""The reasoning node: calls the LLM with bound tools."""
-from __future__ import annotations
+"""The reasoning node: calls the LLM with bound tools.
 
+ATTENTION : PAS de `from __future__ import annotations` ici — voir le
+commentaire d'en-tête de `app/agent/graph.py` : il casse l'injection du
+`config` LangGraph dans `call_model` et désactive silencieusement toute la
+restriction d'outils par utilisateur.
+"""
 from datetime import timedelta
 
 from langchain_core.messages import SystemMessage, trim_messages

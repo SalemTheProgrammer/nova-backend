@@ -1,6 +1,14 @@
-"""LangGraph wiring: agent <-> tools loop compiled into a runnable graph."""
-from __future__ import annotations
+"""LangGraph wiring: agent <-> tools loop compiled into a runnable graph.
 
+ATTENTION : PAS de `from __future__ import annotations` dans ce module (ni dans
+agent_node.py). Cet import transforme les annotations en chaînes, et l'
+inspection de signature de LangGraph ne reconnaît alors plus le paramètre
+`config: RunnableConfig | None` des nœuds : le config n'est PAS injecté
+(config=None, avec seulement un UserWarning au démarrage), donc
+`outils_autorises` n'arrive jamais aux nœuds et TOUTE la restriction d'outils
+par utilisateur est silencieusement désactivée — chaque numéro a tous les
+outils. Bug découvert en production le 2026-07-18.
+"""
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
