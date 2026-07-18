@@ -91,12 +91,27 @@ def trs(
     return _trs_read(scope, id, trs_service.calculer_trs_ordre(db, of))
 
 
+# Le résumé recompute le TRS de la fenêtre 8 h depuis les événements bruts à
+# chaque appel (~0,5-3 s) et chaque client ouvert le poll à ~1/s : un cache
+# court mutualise le calcul entre les clients sans staleness perceptible.
+_RESUME_CACHE_TTL_S = 2.0
+_resume_cache: dict[int | None, tuple[float, DashboardResumeRead]] = {}
+# L'historique OEE recalcule le TRS de chaque bucket (7 jours / 30 jours) : le
+# plus lourd de tous les endpoints, pour une courbe qui ne bouge qu'à l'heure.
+_HISTORY_CACHE_TTL_S = 60.0
+_history_cache: dict[tuple[int | None, str], tuple[float, list[PointOEERead]]] = {}
+
+
 @router.get("/dashboard/resume", response_model=DashboardResumeRead)
 def dashboard_resume(
     ligne_id: int | None = Query(default=None), db: Session = Depends(get_db)
 ) -> DashboardResumeRead:
+    now = time.monotonic()
+    cached = _resume_cache.get(ligne_id)
+    if cached is not None and now - cached[0] < _RESUME_CACHE_TTL_S:
+        return cached[1]
     r = dashboard_service.construire_resume(db, ligne_id=ligne_id)
-    return DashboardResumeRead(
+    lecture = DashboardResumeRead(
         trs_global=r.trs_global,
         disponibilite=r.disponibilite,
         performance=r.performance,
@@ -186,6 +201,8 @@ def dashboard_resume(
             for m in r.matieres_consommees
         ],
     )
+    _resume_cache[ligne_id] = (now, lecture)
+    return lecture
 
 
 @router.get("/kpi/oee-history", response_model=list[PointOEERead])
@@ -194,8 +211,12 @@ def oee_history(
     periode: Literal["day", "week", "month"] = Query(default="week"),
     db: Session = Depends(get_db),
 ) -> list[PointOEERead]:
+    now = time.monotonic()
+    cached = _history_cache.get((ligne_id, periode))
+    if cached is not None and now - cached[0] < _HISTORY_CACHE_TTL_S:
+        return cached[1]
     points = dashboard_service.construire_historique_oee(db, ligne_id=ligne_id, periode=periode)
-    return [
+    lecture = [
         PointOEERead(
             label=p.label,
             horodatage=p.horodatage,
@@ -206,6 +227,8 @@ def oee_history(
         )
         for p in points
     ]
+    _history_cache[(ligne_id, periode)] = (now, lecture)
+    return lecture
 
 
 # Les insights recalculent le TRS de chaque machine à chaque appel : coûteux,
