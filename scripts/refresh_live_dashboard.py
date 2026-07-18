@@ -159,16 +159,20 @@ def refresh() -> None:
                 if of is not None:
                     of.statut = StatutOF.EN_COURS
             if of is None:
-                # Dernier recours : rouvrir un OF TERMINE de la ligne (on le
-                # relance en EN_COURS) pour qu'il y ait toujours un OF monté.
-                of = db.execute(
-                    select(OrdreFabrication)
-                    .where(
-                        OrdreFabrication.ligne_production_id == ligne_id,
-                        OrdreFabrication.statut == StatutOF.TERMINE,
-                    )
-                    .order_by(OrdreFabrication.id.desc())
-                ).scalars().first()
+                # Rouvrir un OF TERMINE puis, à défaut, un OF ANNULE de la ligne
+                # (on le relance en EN_COURS) pour qu'il y ait toujours un OF
+                # monté — certaines lignes de prod n'ont plus que des ANNULE.
+                for statut_repli in (StatutOF.TERMINE, StatutOF.ANNULE):
+                    of = db.execute(
+                        select(OrdreFabrication)
+                        .where(
+                            OrdreFabrication.ligne_production_id == ligne_id,
+                            OrdreFabrication.statut == statut_repli,
+                        )
+                        .order_by(OrdreFabrication.id.desc())
+                    ).scalars().first()
+                    if of is not None:
+                        break
                 if of is not None:
                     of.statut = StatutOF.EN_COURS
                     of.date_fin_reelle = None
