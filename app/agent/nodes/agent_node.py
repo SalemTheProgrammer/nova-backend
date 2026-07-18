@@ -49,8 +49,10 @@ def _addendum_perimetre(bloques: list[str]) -> str:
         "Tu n'as PAS accès aux capacités suivantes pour cet utilisateur :\n"
         f"{lignes}\n"
         "Si l'opérateur demande l'une de ces actions, n'essaie pas de la réaliser "
-        "et n'invente pas de résultat. Réponds poliment, en français, avec cette "
-        f"phrase exacte : « {REFUS_OUTIL} »\n"
+        "et n'invente pas de résultat — ne dis JAMAIS qu'une donnée est affichée, "
+        "trouvée ou envoyée si tu n'as pas réellement appelé un outil qui l'a "
+        "fait. Réponds poliment, en français, avec cette phrase exacte : "
+        f"« {REFUS_OUTIL} »\n"
     )
 
 
