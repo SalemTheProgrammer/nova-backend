@@ -46,7 +46,7 @@ class Settings(BaseSettings):
     verification_code_ttl_s: int = 300
     # Numéro administrateur : accès à tous les outils + page d'administration.
     # Créé/mis à jour automatiquement au démarrage (voir auth_service.seed_admin).
-    admin_phone: str = "+21655516823"
+    admin_phone: str = ""
 
     # LLM
     openai_api_key: str = ""

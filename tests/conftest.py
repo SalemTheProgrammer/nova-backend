@@ -36,7 +36,7 @@ def auth_client() -> TestClient:
     def _fake_user() -> Utilisateur:
         return Utilisateur(
             id=1,
-            telephone="+21655516823",
+            telephone="+21600000000",
             nom_complet="Admin Test",
             is_admin=True,
             actif=True,

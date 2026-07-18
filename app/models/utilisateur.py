@@ -19,7 +19,7 @@ class Utilisateur(Base, TimestampMixin):
     __tablename__ = "utilisateurs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    # Numéro normalisé en E.164 (ex. +21655516823), unique.
+    # Numéro normalisé en E.164 (ex. +21600000000), unique.
     telephone: Mapped[str] = mapped_column(String(20), unique=True, index=True, nullable=False)
     nom_complet: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
