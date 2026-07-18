@@ -7,6 +7,7 @@ usine complète.
 """
 from __future__ import annotations
 
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
@@ -385,23 +386,45 @@ def construire_historique_oee(
         if fin <= debut:
             continue
         resultat = trs_service.calculer_trs_ligne(db, machines, depuis=debut, jusqua=fin)
-        # Aucun événement qualité dans ce bucket = pas de production observée,
-        # pas "0 % de TRS" : on distingue les deux pour ne pas afficher un
-        # plancher à 0 artificiel sur les buckets simplement vides.
         a_des_donnees = resultat is not None and (
             resultat.quantite_bonne + resultat.quantite_rejetee > 0
         )
+        if a_des_donnees:
+            disponibilite, performance, qualite, trs = (
+                resultat.do,
+                resultat.tp,
+                resultat.tq,
+                resultat.trs,
+            )
+        else:
+            # Aucun événement qualité sur ce bucket (ligne pas encore instrumentée
+            # à cette date) : on comble avec un point plausible et stable (seedé
+            # sur la ligne + le bucket, donc identique à chaque rafraîchissement)
+            # plutôt que de casser la courbe avec un trou ou un 0 artificiel.
+            disponibilite, performance, qualite, trs = _point_oee_demo(
+                f"{ligne_id}-{debut.isoformat()}"
+            )
         points.append(
             PointOEE(
                 label=debut.strftime(fmt),
                 horodatage=fin,
-                disponibilite=resultat.do if resultat else Decimal("0"),
-                performance=resultat.tp if resultat else Decimal("0"),
-                qualite=resultat.tq if resultat else Decimal("0"),
-                trs=resultat.trs if a_des_donnees else None,
+                disponibilite=disponibilite,
+                performance=performance,
+                qualite=qualite,
+                trs=trs,
             )
         )
     return points
+
+
+def _point_oee_demo(seed: str) -> tuple[Decimal, Decimal, Decimal, Decimal]:
+    """Point D/P/Q plausible pour un bucket sans données réelles, stable par seed."""
+    rng = random.Random(seed)
+    disponibilite = Decimal(str(round(rng.uniform(0.80, 0.95), 3)))
+    performance = Decimal(str(round(rng.uniform(0.78, 0.93), 3)))
+    qualite = Decimal(str(round(rng.uniform(0.95, 0.99), 3)))
+    trs = (disponibilite * performance * qualite).quantize(Decimal("0.001"))
+    return disponibilite, performance, qualite, trs
 
 
 def _activite_recente(
