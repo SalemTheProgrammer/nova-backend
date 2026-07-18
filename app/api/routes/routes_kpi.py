@@ -1,6 +1,7 @@
 """TRS/TRG/TRE (AFNOR), résumé tableau de bord, et insights IA instantanés."""
 from __future__ import annotations
 
+import time
 from datetime import datetime
 from typing import Literal
 
@@ -207,6 +208,20 @@ def oee_history(
     ]
 
 
+# Les insights recalculent le TRS de chaque machine à chaque appel : coûteux,
+# et tous les panneaux IA ouverts posent la même question. Un cache de 10 s
+# rend la réponse instantanée pour les suiveurs sans staleness perceptible
+# (le texte est consultatif, pas un compteur temps réel).
+_INSIGHTS_CACHE_TTL_S = 10.0
+_insights_cache: tuple[float, list[str]] | None = None
+
+
 @router.get("/ai/insights", response_model=InsightsRead)
 def ai_insights(db: Session = Depends(get_db)) -> InsightsRead:
-    return InsightsRead(insights=ai_agent_service.generer_insights(db))
+    global _insights_cache
+    now = time.monotonic()
+    if _insights_cache is not None and now - _insights_cache[0] < _INSIGHTS_CACHE_TTL_S:
+        return InsightsRead(insights=_insights_cache[1])
+    insights = ai_agent_service.generer_insights(db)
+    _insights_cache = (now, insights)
+    return InsightsRead(insights=insights)
