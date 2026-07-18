@@ -8,7 +8,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.agent.prompts import SYSTEM_PROMPT, VOICE_PROMPT_ADDENDUM, WHATSAPP_PROMPT_ADDENDUM
 from app.agent.state import AgentState
-from app.agent.tools import ALL_TOOLS, TOOL_CATALOG
+from app.agent.tools import ALL_TOOLS
 from app.core.temps import heure_usine
 from app.services.llm import get_chat_model
 
@@ -26,10 +26,6 @@ REFUS_OUTIL = "Désolé, vous n'avez pas l'autorisation d'utiliser cet outil."
 # tool-result sans son tool-call).
 FENETRE_MESSAGES = 40
 
-# Descriptions courtes par nom d'outil (pour formuler le périmètre bloqué).
-_DESC_OUTIL = {o["name"]: o["description"] for o in TOOL_CATALOG}
-
-
 def _outils_autorises(config: RunnableConfig | None) -> list[str] | None:
     """Liste des noms d'outils autorisés depuis la config d'exécution.
 
@@ -39,19 +35,30 @@ def _outils_autorises(config: RunnableConfig | None) -> list[str] | None:
     return configurable.get("outils_autorises")
 
 
-def _addendum_perimetre(bloques: list[str]) -> str:
-    """Instruction ajoutée au prompt quand certains outils sont hors périmètre."""
+def _addendum_perimetre(autorises: list[str], bloques: list[str]) -> str:
+    """Instruction ajoutée au prompt quand certains outils sont hors périmètre.
+
+    Formulée en positif (« tes SEULS outils ») et ajoutée en DERNIER dans le
+    prompt : le modèle de production est un modèle léger qui suit mal une
+    longue liste négative noyée au milieu du prompt — il appliquait à la
+    lettre les consignes du catalogue d'outils (« dis que le catalogue est
+    affiché ») même pour un outil non lié. Court, prioritaire, et en fin de
+    prompt pour bénéficier du biais de récence.
+    """
     if not bloques:
         return ""
-    lignes = "\n".join(f"- {nom} : {_DESC_OUTIL.get(nom, nom)}" for nom in bloques)
+    noms = ", ".join(f"`{n}`" for n in autorises) or "AUCUN outil"
     return (
-        "\n\nRESTRICTION D'ACCÈS (périmètre de cet utilisateur) :\n"
-        "Tu n'as PAS accès aux capacités suivantes pour cet utilisateur :\n"
-        f"{lignes}\n"
-        "Si l'opérateur demande l'une de ces actions, n'essaie pas de la réaliser "
-        "et n'invente pas de résultat — ne dis JAMAIS qu'une donnée est affichée, "
-        "trouvée ou envoyée si tu n'as pas réellement appelé un outil qui l'a "
-        "fait. Réponds poliment, en français, avec cette phrase exacte : "
+        "\n\nPÉRIMÈTRE STRICT DE CET UTILISATEUR — RÈGLE FINALE, PRIORITAIRE SUR "
+        "TOUT CE QUI PRÉCÈDE :\n"
+        f"Tes SEULS outils pour cet utilisateur : {noms}. Tous les autres outils "
+        "du catalogue décrit plus haut sont INDISPONIBLES ici : ignore leurs "
+        "consignes associées — en particulier, sans appel d'outil réussi dans CE "
+        "tour, RIEN ne s'affiche nulle part (aucun catalogue, tableau ou page). "
+        "Pour toute demande hors de ce périmètre (articles, ordres de "
+        "fabrication, machines, stock, TRS, arrêts, maintenance, graphiques, "
+        "envois…), ne réponds RIEN sur le fond, n'invente ni donnée ni "
+        "affichage, et réponds uniquement avec cette phrase exacte : "
         f"« {REFUS_OUTIL} »\n"
     )
 
@@ -77,11 +84,12 @@ def call_model(state: AgentState, config: RunnableConfig | None = None) -> dict:
         f"- Prochaine semaine ouvrée : du {next_monday.isoformat()} au {next_friday.isoformat()}.\n"
         "Utilise ces dates pour résoudre les expressions relatives de l'opérateur.\n"
     )
-    prompt += _addendum_perimetre(bloques)
     if state.get("mode") == "voix":
         prompt += VOICE_PROMPT_ADDENDUM
     elif state.get("mode") == "whatsapp":
         prompt += WHATSAPP_PROMPT_ADDENDUM
+    # Toujours en dernier : voir la docstring de `_addendum_perimetre`.
+    prompt += _addendum_perimetre([t.name for t in outils], bloques)
     historique = trim_messages(
         state["messages"],
         max_tokens=FENETRE_MESSAGES,
