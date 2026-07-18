@@ -175,6 +175,18 @@ def refresh() -> None:
                     of.date_debut_reelle = depuis
             if of is not None and of.date_debut_reelle is None:
                 of.date_debut_reelle = depuis
+            if of is not None:
+                # Garantir de la marge : sans quoi la boucle live (auto_simulator)
+                # atteint la quantité planifiée en quelques secondes, termine l'OF
+                # et arrête la machine (statut ARRET incohérent avec un TRS vivant).
+                # On planifie ~8 h de production d'avance au cycle cible.
+                deja = of.quantite_bonne + of.quantite_rejetee
+                cadence_h = Decimal("3600") / (of.article.temps_cycle_cible_s or Decimal("3.5"))
+                cible = deja + (cadence_h * Decimal("8")).quantize(Decimal("1"))
+                if of.quantite_planifiee < cible:
+                    of.quantite_planifiee = cible
+                of.statut = StatutOF.EN_COURS
+                of.date_fin_reelle = None
             of_par_ligne[ligne_id] = of
             return of
 
