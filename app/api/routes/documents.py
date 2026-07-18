@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.access import require_category
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.security import require_api_key
@@ -23,7 +24,11 @@ from app.services.citation_service import extraire_phrases_pertinentes
 from app.services.document_ingest import ingerer_pdf
 from app.services.vector_store import delete_document_vectors, search_documents
 
-router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/documents",
+    tags=["documents"],
+    dependencies=[Depends(require_api_key), Depends(require_category("Documents"))],
+)
 
 CITATION_MAX = 500
 

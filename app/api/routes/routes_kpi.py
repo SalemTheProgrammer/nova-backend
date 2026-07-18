@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.access import require_category
 from app.core.security import require_api_key
 from app.db.session import get_db
 from app.models import Machine, OrdreFabrication
@@ -28,7 +29,10 @@ from app.schemas.kpi_schema import (
 from app.schemas.kpi_schema import AlertRead
 from app.services import ai_agent_service, dashboard_service, trs_service
 
-router = APIRouter(tags=["kpi"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    tags=["kpi"],
+    dependencies=[Depends(require_api_key), Depends(require_category("Supervision / MES"))],
+)
 
 
 def _trs_read(scope: str, scope_id: int | None, resultat: trs_service.TRSResult) -> TRSRead:

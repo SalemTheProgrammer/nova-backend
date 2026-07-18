@@ -7,13 +7,20 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.security import require_api_key
+from app.core.security import get_current_user, require_api_key
 from app.db.session import get_db
 from app.models import QualityEvent
 from app.models.enums import TypeEvenementQualite
 from app.schemas.quality_schema import QualiteResume, QualityEventRead
 
-router = APIRouter(prefix="/qualite", tags=["qualite"], dependencies=[Depends(require_api_key)])
+# Pas de catégorie d'outil dédiée à la qualité dans le catalogue agent : accès
+# ouvert à tout utilisateur connecté (comme avant l'ajout du contrôle par
+# catégorie), simplement plus authentifié que la seule clé API partagée.
+router = APIRouter(
+    prefix="/qualite",
+    tags=["qualite"],
+    dependencies=[Depends(require_api_key), Depends(get_current_user)],
+)
 
 
 @router.get("/evenements", response_model=list[QualityEventRead])

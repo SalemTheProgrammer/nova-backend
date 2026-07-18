@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.access import require_category
 from app.core.exceptions import AppError, FabricationError
 from app.core.security import require_api_key
 from app.db.session import get_db
@@ -30,7 +31,10 @@ from app.services.line_queue_service import DispositionPreemption
 router = APIRouter(
     prefix="/ordres-fabrication",
     tags=["ordres-fabrication"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[
+        Depends(require_api_key),
+        Depends(require_category("Fabrication", "Actions machine")),
+    ],
 )
 
 

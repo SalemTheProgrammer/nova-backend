@@ -4,6 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.core.access import require_category
 from app.core.exceptions import AppError
 from app.core.security import require_api_key
 from app.db.session import get_db
@@ -21,7 +22,7 @@ from app.services import manufacturing as svc
 router = APIRouter(
     prefix="/stock",
     tags=["stock"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_api_key), Depends(require_category("Fabrication"))],
 )
 
 

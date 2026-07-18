@@ -18,6 +18,12 @@ from fastapi.responses import HTMLResponse
 
 from app.core.config import get_settings
 
+# NOTE (non traité ici) : servie sans authentification par conception (page
+# HTML autonome ouverte par navigation directe, sans jeton Bearer ni en-tête
+# X-API-Key possible depuis une simple navigation navigateur) — donc pas
+# gérable avec le même mécanisme require_admin/require_category que le reste
+# de cette passe. Elle expose la clé API en clair dans le HTML servi ; connue
+# comme angle mort côté sécurité, en dehors du périmètre de ce correctif.
 router = APIRouter(tags=["console"])
 
 

@@ -10,11 +10,15 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 
-from app.core.security import require_api_key
+from app.core.security import require_admin, require_api_key
 from app.db.session import session_scope
 from app.models import AuditLog
 
-router = APIRouter(prefix="/audit", tags=["audit"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/audit",
+    tags=["audit"],
+    dependencies=[Depends(require_api_key), Depends(require_admin)],
+)
 
 
 class EntreeAudit(BaseModel):

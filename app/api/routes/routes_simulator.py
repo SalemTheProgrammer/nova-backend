@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.api.routes.routes_machines import machine_read
+from app.core.access import require_category
 from app.core.exceptions import AppError
 from app.core.security import require_api_key
 from app.db.session import get_db
@@ -31,7 +32,12 @@ from app.services import simulator_service
 from app.services.websocket_manager import manager
 
 router = APIRouter(
-    prefix="/simulateur", tags=["simulateur"], dependencies=[Depends(require_api_key)]
+    prefix="/simulateur",
+    tags=["simulateur"],
+    dependencies=[
+        Depends(require_api_key),
+        Depends(require_category("Jumeau numérique", "Actions machine")),
+    ],
 )
 
 

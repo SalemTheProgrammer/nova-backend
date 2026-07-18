@@ -15,9 +15,13 @@ from pydantic import BaseModel, Field
 
 from app.core.config import get_settings
 from app.core.logging import get_logger
-from app.core.security import require_api_key
+from app.core.security import get_current_user, require_api_key
 
-router = APIRouter(prefix="/voice", tags=["voice"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/voice",
+    tags=["voice"],
+    dependencies=[Depends(require_api_key), Depends(get_current_user)],
+)
 logger = get_logger(__name__)
 
 MAX_AUDIO_BYTES = 20 * 1024 * 1024

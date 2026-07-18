@@ -7,14 +7,21 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.exceptions import AppError
-from app.core.security import require_api_key
+from app.core.security import get_current_user, require_api_key
 from app.db.session import get_db
 from app.models import AgentProposal
 from app.models.enums import StatutProposition
 from app.schemas.agent_schema import AgentProposalRead, AutonomieRead, AutonomieUpdate
 from app.services import supervisor_service
 
-router = APIRouter(prefix="/agent", tags=["agent-superviseur"], dependencies=[Depends(require_api_key)])
+# Panneau propositions/autonomie visible à tout utilisateur connecté (voir
+# RightAIAgent.tsx) — pas réservé à l'admin, juste authentifié par utilisateur
+# plutôt que par la seule clé API partagée.
+router = APIRouter(
+    prefix="/agent",
+    tags=["agent-superviseur"],
+    dependencies=[Depends(require_api_key), Depends(get_current_user)],
+)
 
 
 def _lire(p: AgentProposal) -> AgentProposalRead:

@@ -8,13 +8,21 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.access import require_category
 from app.core.security import require_api_key
 from app.db.session import get_db
 from app.models import DowntimeEvent
 from app.models.enums import CauseArret
 from app.schemas.downtime_schema import DowntimePage, DowntimeRead
 
-router = APIRouter(prefix="/arrets", tags=["arrets"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/arrets",
+    tags=["arrets"],
+    dependencies=[
+        Depends(require_api_key),
+        Depends(require_category("Supervision / MES", "Actions machine")),
+    ],
+)
 
 
 def _read(d: DowntimeEvent) -> DowntimeRead:

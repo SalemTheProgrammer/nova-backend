@@ -5,13 +5,21 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.access import require_category
 from app.core.security import require_api_key
 from app.db.session import get_db
 from app.models import DowntimeEvent, Machine, MachineEvent
 from app.schemas.machine_schema import DowntimeActifRead, MachineEventRead, MachineRead
 from app.services import trs_service
 
-router = APIRouter(prefix="/machines", tags=["machines"], dependencies=[Depends(require_api_key)])
+router = APIRouter(
+    prefix="/machines",
+    tags=["machines"],
+    dependencies=[
+        Depends(require_api_key),
+        Depends(require_category("Supervision / MES", "Actions machine")),
+    ],
+)
 
 
 def _downtime_actif(db: Session, machine_id: int) -> DowntimeActifRead | None:
