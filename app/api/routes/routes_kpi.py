@@ -98,7 +98,7 @@ def trs(
 # (3 s) compte à partir de la FIN du calcul, sinon un calcul de 2 s expire
 # quasi immédiatement et le cache ne sert jamais. Le verrou évite la ruée :
 # pendant qu'un client calcule, les autres attendent puis lisent le cache.
-_RESUME_CACHE_TTL_S = 3.0
+_RESUME_CACHE_TTL_S = 8.0
 _resume_cache: dict[int | None, tuple[float, DashboardResumeRead]] = {}
 _resume_lock = threading.Lock()
 # L'historique OEE recalcule le TRS de chaque bucket (7 jours / 30 jours) : le
