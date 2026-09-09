@@ -42,6 +42,13 @@ from app.models.referentiel import (
     ligne_article,
 )
 from app.models.stock import LotMatierePremiere, MouvementStock
+from app.models.prelevement import PrelevementMP, StatutPrelevement
+from app.models.sparkplug import (
+    SparkplugDevice,
+    SparkplugTagMapping,
+    TagTransformation,
+    TargetKpi,
+)
 from app.models.utilisateur import Utilisateur
 from app.models.code_verification import CodeVerification
 
@@ -93,4 +100,12 @@ __all__ = [
     # authentification par numéro + périmètre d'outils
     "Utilisateur",
     "CodeVerification",
+    # prélèvement MP (BPF / DPM)
+    "PrelevementMP",
+    "StatutPrelevement",
+    # Sparkplug B & IoT
+    "SparkplugDevice",
+    "SparkplugTagMapping",
+    "TargetKpi",
+    "TagTransformation",
 ]

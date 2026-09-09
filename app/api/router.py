@@ -21,8 +21,10 @@ from app.api.routes import (
     routes_kpi,
     routes_machines,
     routes_maintenance,
+    routes_prelevement,
     routes_quality,
     routes_simulator,
+    routes_sparkplug,
     routes_voice,
     stock,
     whatsapp,
@@ -50,4 +52,6 @@ api_router.include_router(routes_maintenance.router)
 api_router.include_router(routes_kpi.router)
 api_router.include_router(routes_agent.router)
 api_router.include_router(routes_voice.router)
+api_router.include_router(routes_sparkplug.router)
+api_router.include_router(routes_prelevement.router)
 api_router.include_router(whatsapp.router)
