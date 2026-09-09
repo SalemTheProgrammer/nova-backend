@@ -70,6 +70,34 @@ async def whatsapp_status_endpoint() -> dict:
         return {"connected": False, "error": str(e)}
 
 
+@public_router.get("/qr-raw")
+async def whatsapp_qr_raw_endpoint() -> dict:
+    """Retourne le QR code brut en direct."""
+    settings = get_settings()
+    url = f"{settings.whatsapp_service_url}/qr-raw"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+            return resp.json()
+    except Exception as e:
+        return {"qr": "", "connected": False, "error": str(e)}
+
+
+@public_router.get("/reset")
+@public_router.post("/reset")
+async def whatsapp_reset_endpoint() -> dict:
+    """Réinitialise la session WhatsApp (supprime ./auth) et relance un scan propre."""
+    settings = get_settings()
+    url = f"{settings.whatsapp_service_url}/reset"
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.post(url)
+            return resp.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
 TTS_MAX_CHARS = 600
 FALLBACK_AUDIO = (
