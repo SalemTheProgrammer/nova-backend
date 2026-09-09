@@ -17,10 +17,23 @@ from decimal import Decimal
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models import DowntimeEvent, Machine, OrdreFabrication, QualityEvent
-from app.models.enums import StatutMachine, TypeEvenementQualite
+from app.models import DowntimeEvent, Machine, MachineEvent, OrdreFabrication, QualityEvent
+from app.models.enums import StatutMachine, TypeEvenementMachine, TypeEvenementQualite
 
 FENETRE_DEFAUT = timedelta(hours=8)
+
+_ZERO = Decimal("0")
+
+
+def _zero_result() -> TRSResult:
+    """Résultat TRS neutre (aucune activité)."""
+    return TRSResult(
+        temps=TempsModel(tt=_ZERO, to=_ZERO, tr=_ZERO, tf=_ZERO, tn=_ZERO, tu=_ZERO),
+        tq=_ZERO, tp=_ZERO, do=_ZERO,
+        trs=_ZERO, trg=_ZERO, tre=_ZERO,
+        pertes=Pertes(disponibilite_s=_ZERO, performance_s=_ZERO, qualite_s=_ZERO),
+        quantite_bonne=0, quantite_rejetee=0,
+    )
 
 
 @dataclass
@@ -102,31 +115,6 @@ def _calculer(
         (q.quantite for q in quality_events if q.type == TypeEvenementQualite.REBUT), 0
     )
 
-    if qte_bonne == 0 and qte_rejetee == 0 and not downtimes:
-        return TRSResult(
-            temps=TempsModel(
-                tt=tt,
-                to=Decimal("0"),
-                tr=Decimal("0"),
-                tf=Decimal("0"),
-                tn=Decimal("0"),
-                tu=Decimal("0"),
-            ),
-            tq=Decimal("0"),
-            tp=Decimal("0"),
-            do=Decimal("0"),
-            trs=Decimal("0"),
-            trg=Decimal("0"),
-            tre=Decimal("0"),
-            pertes=Pertes(
-                disponibilite_s=Decimal("0"),
-                performance_s=Decimal("0"),
-                qualite_s=Decimal("0"),
-            ),
-            quantite_bonne=0,
-            quantite_rejetee=0,
-        )
-
     tn = Decimal(qte_bonne + qte_rejetee) * cycle_cible_s
     tu = Decimal(qte_bonne) * cycle_cible_s
 
@@ -157,20 +145,43 @@ def _calculer(
     )
 
 
+def _trouver_debut_activite(db: Session, machine_id: int) -> datetime | None:
+    """Trouve le timestamp du dernier MACHINE_STARTED pour borner le calcul."""
+    return db.execute(
+        select(MachineEvent.created_at)
+        .where(
+            MachineEvent.machine_id == machine_id,
+            MachineEvent.type == TypeEvenementMachine.MACHINE_STARTED,
+        )
+        .order_by(MachineEvent.created_at.desc())
+        .limit(1)
+    ).scalar()
+
+
 def calculer_trs_machine(
     db: Session, machine: Machine, *, depuis: datetime | None = None, jusqua: datetime | None = None
 ) -> TRSResult:
     jusqua = jusqua or datetime.utcnow()
+
     if depuis is None:
         if machine.ordre_fabrication and machine.ordre_fabrication.date_debut_reelle:
+            # Meilleur cas : on connaît le début réel de l'OF
             depuis = machine.ordre_fabrication.date_debut_reelle
         else:
-            depuis = jusqua - FENETRE_DEFAUT
+            # Pas d'OF actif → chercher le dernier démarrage machine
+            debut_activite = _trouver_debut_activite(db, machine.id)
+            if debut_activite:
+                depuis = debut_activite
+            else:
+                # Aucun événement de démarrage → machine jamais active
+                return _zero_result()
 
     downtimes = list(
         db.execute(
             select(DowntimeEvent).where(
-                DowntimeEvent.machine_id == machine.id, DowntimeEvent.start_time < jusqua
+                DowntimeEvent.machine_id == machine.id,
+                DowntimeEvent.start_time >= depuis,
+                DowntimeEvent.start_time < jusqua,
             )
         ).scalars()
     )
@@ -184,36 +195,6 @@ def calculer_trs_machine(
         ).scalars()
     )
     ligne = machine.ligne_production
-    if (
-        machine.statut == StatutMachine.ARRET
-        and (machine.quantite_produite or 0) == 0
-        and not quality_events
-        and not downtimes
-    ):
-        return TRSResult(
-            temps=TempsModel(
-                tt=Decimal("0"),
-                to=Decimal("0"),
-                tr=Decimal("0"),
-                tf=Decimal("0"),
-                tn=Decimal("0"),
-                tu=Decimal("0"),
-            ),
-            tq=Decimal("0"),
-            tp=Decimal("0"),
-            do=Decimal("0"),
-            trs=Decimal("0"),
-            trg=Decimal("0"),
-            tre=Decimal("0"),
-            pertes=Pertes(
-                disponibilite_s=Decimal("0"),
-                performance_s=Decimal("0"),
-                qualite_s=Decimal("0"),
-            ),
-            quantite_bonne=0,
-            quantite_rejetee=0,
-        )
-
     return _calculer(
         depuis=depuis,
         jusqua=jusqua,

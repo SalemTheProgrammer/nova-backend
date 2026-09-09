@@ -31,14 +31,18 @@ from app.models import (
     Machine,
     MaintenanceEvent,
     MatierePremiere,
+    OrdreFabrication,
 )
-from app.models.enums import CauseArret, CauseRebut, StatutLot, StatutMachine, TypeEvenementMachine
+from app.models.enums import CauseArret, CauseRebut, StatutLot, StatutMachine, StatutOF, TypeEvenementMachine
 from app.services import broadcast_service, event_service
 from app.services import manufacturing as manufacturing_svc
 
 logger = get_logger(__name__)
 
-TICK_S = 2.0
+TICK_S = 1.0
+# Mode démo : accélération de la production (5× le rythme réel) pour que les
+# compteurs et le TRS montent visiblement en quelques secondes.
+SPEED_MULTIPLIER = 5.0
 TAUX_REBUT = 0.04
 # Plus de micro-arrêt aléatoire : une machine en marche ne tombe plus en panne
 # toute seule. Les pannes ne surviennent que sur action délibérée (bouton
@@ -82,22 +86,50 @@ class AutoSimulator:
         logger.info("auto_simulator_demarre")
 
     def _amorcer(self) -> None:
-        """Redémarre toute machine ayant un OF actif qui n'est pas déjà en marche.
+        """Redémarre toute machine active avec un OF.
 
-        Ferme les arrêts et maintenances encore ouverts puis repasse la machine en
-        MARCHE — la ligne repart proprement et rien ne reste figé d'un run précédent.
-        Une machine sans OF assigné n'a rien à produire : elle reste à l'arrêt
-        (sinon on affiche un statut MARCHE incohérent avec « OF actif : aucun »).
+        1. Si une machine n'a pas d'OF, on lui en assigne un (PLANIFIE) de sa ligne.
+        2. On ferme les arrêts/maintenances ouverts.
+        3. On démarre la machine (MACHINE_STARTED).
         """
         with session_scope() as db:
             machines = db.execute(
                 select(Machine).where(Machine.actif.is_(True))
             ).scalars().all()
+
+            # Pré-charger les OF PLANIFIE disponibles par ligne
+            ofs_planifie = list(db.execute(
+                select(OrdreFabrication).where(
+                    OrdreFabrication.statut.in_([StatutOF.PLANIFIE, StatutOF.BROUILLON])
+                )
+            ).scalars().all())
+            ofs_par_ligne: dict[int, list] = {}
+            for of in ofs_planifie:
+                if of.ligne_production_id:
+                    ofs_par_ligne.setdefault(of.ligne_production_id, []).append(of)
+
             for machine in machines:
                 if machine.statut == StatutMachine.MARCHE:
                     continue
+
+                # Auto-assigner un OF si la machine n'en a pas
                 if machine.ordre_fabrication_id is None:
-                    continue
+                    ligne_id = machine.ligne_production_id
+                    disponibles = ofs_par_ligne.get(ligne_id, [])
+                    if disponibles:
+                        of = disponibles.pop(0)
+                        of.statut = StatutOF.EN_COURS
+                        of.date_debut_reelle = datetime.utcnow()
+                        machine.ordre_fabrication_id = of.id
+                        db.flush()
+                        logger.info(
+                            "auto_simulator_of_assigne",
+                            machine=machine.code, of=of.numero,
+                        )
+                    else:
+                        continue  # Pas d'OF disponible pour cette ligne
+
+                # Fermer les arrêts/maintenances ouverts
                 for dt in db.execute(
                     select(DowntimeEvent).where(
                         DowntimeEvent.machine_id == machine.id,
@@ -113,6 +145,8 @@ class AutoSimulator:
                 ).scalars().all():
                     me.end_time = datetime.utcnow()
                 self._micro_fin.pop(machine.id, None)
+
+                # Démarrer la machine
                 event_service.enregistrer_evenement(
                     db,
                     machine=machine,
@@ -166,8 +200,8 @@ class AutoSimulator:
                 if cycle <= 0:
                     continue
 
-                # Production au rythme du temps de cycle.
-                credit = self._credit.get(machine.id, 0.0) + TICK_S
+                # Production au rythme du temps de cycle (× multiplicateur démo).
+                credit = self._credit.get(machine.id, 0.0) + TICK_S * SPEED_MULTIPLIER
                 n_pieces = int(credit // cycle)
                 self._credit[machine.id] = credit - n_pieces * cycle
                 if n_pieces > 0:
