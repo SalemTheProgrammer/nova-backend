@@ -107,6 +107,14 @@ _HISTORY_CACHE_TTL_S = 60.0
 _history_cache: dict[tuple[int | None, str], tuple[float, list[PointOEERead]]] = {}
 
 
+def clear_kpi_caches() -> None:
+    """Vide immédiatement les caches du résumé dashboard et de l'historique TRS."""
+    with _resume_lock:
+        _resume_cache.clear()
+        _history_cache.clear()
+
+
+
 @router.get("/dashboard/resume", response_model=DashboardResumeRead)
 def dashboard_resume(
     ligne_id: int | None = Query(default=None), db: Session = Depends(get_db)

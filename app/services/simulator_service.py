@@ -147,3 +147,75 @@ def envoyer_tag(db: Session, machine: Machine, *, tag: str, valeur: float | str)
         type_evenement=TypeEvenementMachine.SENSOR_TAG_UPDATED,
         payload={"tag": tag, "valeur": valeur},
     )
+
+
+async def reinitialiser_atelier(db: Session) -> dict:
+    """Remet à zéro l'ensemble de la ligne, des compteurs et de l'historique d'événements."""
+    from sqlalchemy import delete, select
+    from app.services.auto_simulator import auto_simulator
+    from app.models import (
+        Machine,
+        OrdreFabrication,
+        MachineEvent,
+        DowntimeEvent,
+        QualityEvent,
+        MaintenanceEvent,
+        Alert,
+        AgentProposal,
+        OFConsommationMP,
+    )
+    from app.models.enums import StatutOF
+    from app.api.routes.routes_machines import machine_read
+    from app.api.routes.routes_kpi import clear_kpi_caches
+    from app.services.websocket_manager import manager
+
+    # 1. Arrêter le simulateur autonome s'il tourne et vider ses compteurs internes
+    auto_simulator.arreter()
+    auto_simulator._credit.clear()
+    auto_simulator._micro_fin.clear()
+    auto_simulator._temperature.clear()
+    auto_simulator._tick_compteur = 0
+
+    # 2. Supprimer tous les événements dynamiques de production
+    db.execute(delete(MachineEvent))
+    db.execute(delete(DowntimeEvent))
+    db.execute(delete(QualityEvent))
+    db.execute(delete(MaintenanceEvent))
+    db.execute(delete(Alert))
+    db.execute(delete(AgentProposal))
+    db.execute(delete(OFConsommationMP))
+
+    # 3. Remise à zéro des machines
+    machines = list(db.execute(select(Machine)).scalars())
+    for m in machines:
+        m.statut = StatutMachine.ARRET
+        m.quantite_produite = 0
+        m.quantite_bonne = 0
+        m.quantite_rejetee = 0
+        m.ordre_fabrication_id = None
+        m.temps_cycle_actuel_s = m.temps_cycle_cible_s
+        m.dernier_evenement_at = None
+
+    # 4. Remise à l'état initial des ordres de fabrication
+    ofs = list(db.execute(select(OrdreFabrication)).scalars())
+    for of in ofs:
+        of.statut = StatutOF.PLANIFIE
+        of.quantite_bonne = 0
+        of.quantite_rejetee = 0
+        of.date_debut_reelle = None
+        of.date_fin_reelle = None
+
+    db.commit()
+
+    # 5. Invalider les caches KPI du dashboard
+    clear_kpi_caches()
+
+    # 6. Diffuser l'événement de remise à zéro et l'état réinitialisé des machines
+    await manager.broadcast({"type": "reset"})
+    for m in machines:
+        db.refresh(m)
+        lecture = machine_read(db, m)
+        await manager.broadcast({"type": "machine_update", "machine": lecture.model_dump(mode="json")})
+
+    return {"ok": True, "message": "Atelier et compteurs réinitialisés à 0 avec succès."}
+

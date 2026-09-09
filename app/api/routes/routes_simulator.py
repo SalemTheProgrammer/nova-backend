@@ -249,3 +249,13 @@ async def declencher_scenario(nom: str, db: Session = Depends(get_db)) -> dict:
     except AppError as exc:
         raise HTTPException(exc.status_code, exc.message)
     return {"scenario": nom, "message": message}
+
+
+@router.post("/reset")
+async def reset_atelier(db: Session = Depends(get_db)) -> dict:
+    """Remise à zéro complète de l'atelier, des événements et des compteurs."""
+    try:
+        return await simulator_service.reinitialiser_atelier(db)
+    except AppError as exc:
+        raise HTTPException(exc.status_code, exc.message)
+

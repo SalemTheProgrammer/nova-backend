@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models import DowntimeEvent, Machine, OrdreFabrication, QualityEvent
-from app.models.enums import TypeEvenementQualite
+from app.models.enums import StatutMachine, TypeEvenementQualite
 
 FENETRE_DEFAUT = timedelta(hours=8)
 
@@ -102,6 +102,31 @@ def _calculer(
         (q.quantite for q in quality_events if q.type == TypeEvenementQualite.REBUT), 0
     )
 
+    if qte_bonne == 0 and qte_rejetee == 0 and not downtimes:
+        return TRSResult(
+            temps=TempsModel(
+                tt=tt,
+                to=Decimal("0"),
+                tr=Decimal("0"),
+                tf=Decimal("0"),
+                tn=Decimal("0"),
+                tu=Decimal("0"),
+            ),
+            tq=Decimal("0"),
+            tp=Decimal("0"),
+            do=Decimal("0"),
+            trs=Decimal("0"),
+            trg=Decimal("0"),
+            tre=Decimal("0"),
+            pertes=Pertes(
+                disponibilite_s=Decimal("0"),
+                performance_s=Decimal("0"),
+                qualite_s=Decimal("0"),
+            ),
+            quantite_bonne=0,
+            quantite_rejetee=0,
+        )
+
     tn = Decimal(qte_bonne + qte_rejetee) * cycle_cible_s
     tu = Decimal(qte_bonne) * cycle_cible_s
 
@@ -159,6 +184,36 @@ def calculer_trs_machine(
         ).scalars()
     )
     ligne = machine.ligne_production
+    if (
+        machine.statut == StatutMachine.ARRET
+        and (machine.quantite_produite or 0) == 0
+        and not quality_events
+        and not downtimes
+    ):
+        return TRSResult(
+            temps=TempsModel(
+                tt=Decimal("0"),
+                to=Decimal("0"),
+                tr=Decimal("0"),
+                tf=Decimal("0"),
+                tn=Decimal("0"),
+                tu=Decimal("0"),
+            ),
+            tq=Decimal("0"),
+            tp=Decimal("0"),
+            do=Decimal("0"),
+            trs=Decimal("0"),
+            trg=Decimal("0"),
+            tre=Decimal("0"),
+            pertes=Pertes(
+                disponibilite_s=Decimal("0"),
+                performance_s=Decimal("0"),
+                qualite_s=Decimal("0"),
+            ),
+            quantite_bonne=0,
+            quantite_rejetee=0,
+        )
+
     return _calculer(
         depuis=depuis,
         jusqua=jusqua,
