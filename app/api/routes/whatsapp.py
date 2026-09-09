@@ -20,6 +20,8 @@ import binascii
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import HTMLResponse
+import httpx
 from pydantic import BaseModel, Field
 
 from sqlalchemy import select
@@ -35,7 +37,38 @@ from app.services import auth_service, chart_image_service, proactive_service
 from app.services.notify_service import WHATSAPP_MAX_CHARS, normaliser_numero
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"], dependencies=[Depends(require_api_key)])
+public_router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 logger = get_logger(__name__)
+
+
+@public_router.get("/qr", response_class=HTMLResponse)
+async def whatsapp_qr_page() -> HTMLResponse:
+    """Affiche la page de scan QR code WhatsApp en HD."""
+    settings = get_settings()
+    url = f"{settings.whatsapp_service_url}/qr"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+            return HTMLResponse(content=resp.text, status_code=resp.status_code)
+    except Exception as e:
+        return HTMLResponse(
+            content=f"<!DOCTYPE html><html><body style='font-family:sans-serif;background:#090d16;color:white;padding:2rem;text-align:center;'><h2>⚠️ Service WhatsApp indisponible</h2><p style='color:#94a3b8;'>{e}</p></body></html>",
+            status_code=503,
+        )
+
+
+@public_router.get("/status")
+async def whatsapp_status_endpoint() -> dict:
+    """Retourne l'état de connexion de la session WhatsApp."""
+    settings = get_settings()
+    url = f"{settings.whatsapp_service_url}/status"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+            return resp.json()
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
+
 
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
 TTS_MAX_CHARS = 600
