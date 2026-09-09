@@ -192,9 +192,23 @@ class AutoSimulator:
                         broadcast_service.diffuser_machine(db, machine)
                     continue
 
-                # Production is valid only while a machine is assigned to an OF.
-                if machine.statut != StatutMachine.MARCHE or machine.ordre_fabrication_id is None:
+                # La machine ne produit que si elle est en marche.
+                if machine.statut != StatutMachine.MARCHE:
                     continue
+
+                # Si la machine n'a pas encore d'OF, lui en affecter un de sa ligne
+                if machine.ordre_fabrication_id is None:
+                    of = db.execute(
+                        select(OrdreFabrication).where(
+                            OrdreFabrication.ligne_production_id == machine.ligne_production_id,
+                            OrdreFabrication.statut.in_([StatutOF.PLANIFIE, StatutOF.BROUILLON]),
+                        ).order_by(OrdreFabrication.id.asc())
+                    ).scalars().first()
+                    if of:
+                        of.statut = StatutOF.EN_COURS
+                        of.date_debut_reelle = of.date_debut_reelle or datetime.utcnow()
+                        machine.ordre_fabrication_id = of.id
+                        db.flush()
 
                 cycle = float(machine.temps_cycle_actuel_s or machine.temps_cycle_cible_s or 0)
                 if cycle <= 0:

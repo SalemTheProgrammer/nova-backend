@@ -5,11 +5,15 @@ machine, puis délègue à `event_service.enregistrer_evenement` (log + état + 
 """
 from __future__ import annotations
 
-from app.core.exceptions import FabricationError
-from app.models import Machine
-from app.models.enums import StatutMachine, TypeEvenementMachine
-from app.services import event_service
+from datetime import datetime
+
+from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+from app.core.exceptions import FabricationError
+from app.models import Machine, OrdreFabrication
+from app.models.enums import StatutMachine, StatutOF, TypeEvenementMachine
+from app.services import event_service
 
 
 def _verifier(condition: bool, message: str) -> None:
@@ -18,21 +22,30 @@ def _verifier(condition: bool, message: str) -> None:
 
 
 def demarrer(db: Session, machine: Machine, *, ordre_fabrication_id: int | None) -> None:
-    # Une machine MARCHE sans OF est « libre » (idle) : seule la présence d'un OF
-    # déjà attaché signale une vraie occupation. Voir `line_scoring_service.
-    # machine_libre_sur_ligne` et `auto_simulator._amorcer`, qui partagent cette
-    # même définition de « libre ».
-    _verifier(
-        machine.ordre_fabrication_id is None,
-        f"{machine.code} est déjà en marche avec un OF en cours.",
-    )
-    if ordre_fabrication_id is None:
-        _verifier(machine.statut != StatutMachine.MARCHE, f"{machine.code} est déjà en marche.")
+    if machine.statut == StatutMachine.MARCHE:
+        return
+
+    of_id = ordre_fabrication_id or machine.ordre_fabrication_id
+    if of_id is None and machine.ligne_production_id:
+        # Trouver un OF planifié pour cette ligne
+        of = db.execute(
+            select(OrdreFabrication).where(
+                OrdreFabrication.ligne_production_id == machine.ligne_production_id,
+                OrdreFabrication.statut.in_([StatutOF.PLANIFIE, StatutOF.BROUILLON]),
+            ).order_by(OrdreFabrication.id.asc())
+        ).scalars().first()
+        if of:
+            of.statut = StatutOF.EN_COURS
+            of.date_debut_reelle = of.date_debut_reelle or datetime.utcnow()
+            of_id = of.id
+            machine.ordre_fabrication_id = of.id
+            db.flush()
+
     event_service.enregistrer_evenement(
         db,
         machine=machine,
         type_evenement=TypeEvenementMachine.MACHINE_STARTED,
-        payload={"ordre_fabrication_id": ordre_fabrication_id} if ordre_fabrication_id else {},
+        payload={"ordre_fabrication_id": of_id} if of_id else {},
     )
 
 

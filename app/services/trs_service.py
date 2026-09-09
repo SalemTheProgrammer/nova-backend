@@ -209,11 +209,25 @@ def calculer_trs_machine(
 def calculer_trs_ligne(
     db: Session, machines: list[Machine], *, depuis: datetime | None = None, jusqua: datetime | None = None
 ) -> TRSResult | None:
-    """TRS d'une ligne = moyenne simple du TRS de ses machines actives (cycle cible connu)."""
+    """TRS d'une ligne = moyenne des machines de la ligne.
+
+    Si certaines machines sont en marche ou ont déjà produit, on calcule la moyenne
+    sur ces machines actives pour que l'activation d'une machine se traduise
+    immédiatement par un TRS visible et dynamique sur le tableau de bord.
+    """
+    machines_avec_cycle = [m for m in machines if m.temps_cycle_cible_s]
+    if not machines_avec_cycle:
+        return None
+
+    machines_actives = [
+        m for m in machines_avec_cycle
+        if m.statut == StatutMachine.MARCHE or (m.quantite_produite or 0) > 0
+    ]
+    cibles = machines_actives if machines_actives else machines_avec_cycle
+
     resultats = [
         calculer_trs_machine(db, m, depuis=depuis, jusqua=jusqua)
-        for m in machines
-        if m.temps_cycle_cible_s
+        for m in cibles
     ]
     if not resultats:
         return None
