@@ -44,6 +44,14 @@ class Settings(BaseSettings):
     auth_token_ttl_s: int = 604800
     # Durée de validité d'un code de vérification (5 minutes).
     verification_code_ttl_s: int = 300
+    # Mode démonstration : `POST /auth/demo` ouvre une session SANS code
+    # WhatsApp, sous un compte dédié dont le périmètre d'outils est limité à la
+    # lecture (aucune commande machine, aucun envoi, aucune écriture d'OF — voir
+    # `auth_service.connexion_demo`). Pensé pour une présentation publique :
+    # laissez `false` le reste du temps.
+    demo_login_enabled: bool = False
+    demo_phone: str = "+21600000000"
+    demo_nom: str = "Visiteur démo"
     # Numéro administrateur : accès à tous les outils + page d'administration.
     # Créé/mis à jour automatiquement au démarrage (voir auth_service.seed_admin).
     admin_phone: str = ""

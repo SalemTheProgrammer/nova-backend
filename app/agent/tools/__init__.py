@@ -58,11 +58,21 @@ TOOL_CATALOG: list[dict[str, str]] = [
 # Ensemble de tous les noms d'outils connus (validation côté admin).
 ALL_TOOL_NAMES: set[str] = {outil.name for outil in ALL_TOOLS}
 
+# Outils SANS effet sur l'atelier : ceux qui n'exigent pas de `confirmation`.
+# C'est le contrat des outils qui modifient quelque chose ou envoient un message
+# (voir `confirmation_gate`), donc le critère se maintient tout seul : un nouvel
+# outil d'action, qui suivra ce contrat, sera exclu d'office. Sert de périmètre
+# au compte de démonstration (`auth_service.connexion_demo`).
+READONLY_TOOL_NAMES: list[str] = sorted(
+    outil.name for outil in ALL_TOOLS if "confirmation" not in outil.args
+)
+
 __all__ = [
     "ALL_TOOLS",
     "DOCUMENT_TOOLS",
     "TOOL_CATALOG",
     "ALL_TOOL_NAMES",
+    "READONLY_TOOL_NAMES",
     "rechercher_documents",
     "lister_documents_disponibles",
     "MANUFACTURING_TOOLS",

@@ -236,3 +236,45 @@ def seed_admin() -> None:
             user.is_admin = True
             user.actif = True
             logger.info("auth_admin_promu", numero=telephone)
+
+
+def connexion_demo(db: Session) -> Utilisateur:
+    """Ouvre une session de DÉMONSTRATION, sans code de vérification.
+
+    Pensé pour une présentation publique : le visiteur voit tout l'atelier et
+    peut dialoguer avec Nova, mais son périmètre d'outils est recalculé à chaque
+    connexion sur `READONLY_TOOL_NAMES` — aucune commande machine, aucun envoi
+    WhatsApp/e-mail, aucune création d'OF, aucun accès administrateur. Le compte
+    est créé au premier appel puis réutilisé.
+
+    Refusé si `DEMO_LOGIN_ENABLED` n'est pas activé : hors présentation, la
+    connexion reste celle par code WhatsApp.
+    """
+    from app.agent.tools import READONLY_TOOL_NAMES  # import tardif : cycle
+
+    settings = get_settings()
+    if not settings.demo_login_enabled:
+        raise AuthenticationError("Le mode démonstration n'est pas activé.")
+
+    telephone = normaliser_numero(settings.demo_phone)
+    user = _get_utilisateur(db, telephone)
+    if user is None:
+        user = Utilisateur(
+            telephone=telephone,
+            nom_complet=settings.demo_nom,
+            is_admin=False,
+            actif=True,
+            outils_autorises=list(READONLY_TOOL_NAMES),
+        )
+        db.add(user)
+        logger.info("auth_demo_compte_cree", numero=telephone)
+    else:
+        # Jamais admin, toujours actif, et périmètre relu depuis le code : une
+        # modification manuelle dans l'admin ne peut pas élargir la démo.
+        user.is_admin = False
+        user.actif = True
+        user.outils_autorises = list(READONLY_TOOL_NAMES)
+    db.commit()
+    db.refresh(user)
+    logger.info("auth_demo_session", outils=len(user.outils_autorises))
+    return user
