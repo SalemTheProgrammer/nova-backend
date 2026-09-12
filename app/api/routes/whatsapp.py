@@ -119,6 +119,19 @@ async def whatsapp_reset_endpoint() -> dict:
         return {"ok": False, "error": str(e)}
 
 
+@public_router.post("/pairing-code")
+async def whatsapp_pairing_code_endpoint(payload: dict) -> dict:
+    """Demande un code d'association WhatsApp par numéro de téléphone."""
+    settings = get_settings()
+    url = f"{settings.whatsapp_service_url}/pairing-code"
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            resp = await client.post(url, json=payload)
+            return resp.json()
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 
 MAX_MEDIA_BYTES = 20 * 1024 * 1024
 TTS_MAX_CHARS = 600
