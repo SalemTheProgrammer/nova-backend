@@ -86,6 +86,30 @@ class Fournisseur(Base, TimestampMixin):
     nom: Mapped[str] = mapped_column(String(255), nullable=False)
     contact: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
+    contacts: Mapped[list["FournisseurContact"]] = relationship(
+        back_populates="fournisseur", cascade="all, delete-orphan"
+    )
+
+
+class FournisseurContact(Base, TimestampMixin):
+    """Interlocuteur / Contact d'un fournisseur avec hiérarchie (directeur, sous-directeur, chef, employé)."""
+
+    __tablename__ = "fournisseur_contact"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    fournisseur_id: Mapped[int] = mapped_column(
+        ForeignKey("fournisseur.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    nom: Mapped[str] = mapped_column(String(255), nullable=False)
+    role_level: Mapped[str] = mapped_column(
+        String(50), index=True, nullable=False
+    )  # "directeur", "sous_directeur", "chef", "employe"
+    poste: Mapped[str] = mapped_column(String(255), nullable=False)
+    telephone: Mapped[str] = mapped_column(String(100), nullable=False)
+    email: Mapped[str] = mapped_column(String(255), default="salem.dahmani345@gmail.com", nullable=False)
+
+    fournisseur: Mapped[Fournisseur] = relationship(back_populates="contacts")
+
 
 class LigneProduction(Base, TimestampMixin):
     """Ligne de production."""

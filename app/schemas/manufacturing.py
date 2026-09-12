@@ -34,6 +34,43 @@ class FournisseurRead(_ORM, FournisseurBase):
     id: int
 
 
+class FournisseurContactBase(BaseModel):
+    fournisseur_id: int
+    nom: str
+    role_level: str  # "directeur", "sous_directeur", "chef", "employe"
+    poste: str
+    telephone: str
+    email: str = "salem.dahmani345@gmail.com"
+
+
+class FournisseurContactCreate(FournisseurContactBase):
+    pass
+
+
+class FournisseurContactUpdate(BaseModel):
+    fournisseur_id: int | None = None
+    nom: str | None = None
+    role_level: str | None = None
+    poste: str | None = None
+    telephone: str | None = None
+    email: str | None = None
+
+
+class FournisseurContactRead(_ORM, FournisseurContactBase):
+    id: int
+    fournisseur_nom: str | None = None
+    fournisseur_code: str | None = None
+
+
+class FournisseurContactPage(BaseModel):
+    items: list[FournisseurContactRead]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    counts: dict[str, int]
+
+
 # --------------------------- Article --------------------------- #
 class ArticleBase(BaseModel):
     code: str

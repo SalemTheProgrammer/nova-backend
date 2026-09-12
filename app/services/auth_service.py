@@ -105,8 +105,8 @@ def demander_code(db: Session, numero: str) -> str | None:
     try:
         notify_service.envoyer_whatsapp(telephone, corps)
         logger.info("auth_code_envoye", numero=telephone)
-    except Exception:  # noqa: BLE001
-        logger.exception("auth_envoi_code_whatsapp_failed", numero=telephone)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("auth_envoi_code_whatsapp_failed", numero=telephone, error=str(exc))
         # En production, l'échec WhatsApp est bloquant (le code n'a pas d'autre
         # canal). Hors production, on laisse passer : le code est dans la console.
         if settings.is_production:

@@ -50,7 +50,7 @@ def lister(
     date_debut: datetime | None = None,
     date_fin: datetime | None = None,
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=5, ge=1, le=200),
+    page_size: int = Query(default=5, ge=1, le=1000),
     db: Session = Depends(get_db),
 ) -> DowntimePage:
     stmt = select(DowntimeEvent)

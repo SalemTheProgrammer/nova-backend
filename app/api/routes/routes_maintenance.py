@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -13,6 +13,9 @@ from app.core.security import require_api_key
 from app.db.session import get_db
 from app.models import MaintenanceEvent
 from app.models.enums import TypeMaintenance
+from app.services import machine_command_service
+from app.services.machine_command_service import MachineCommandError
+from app.services.risk_service import analyser_risques
 
 router = APIRouter(
     prefix="/maintenance",
@@ -30,6 +33,29 @@ class MaintenanceEventRead(BaseModel):
     start_time: datetime
     end_time: datetime | None
     prochaine_maintenance: date | None
+
+
+class RisqueMachineRead(BaseModel):
+    machine_id: int
+    code: str
+    nom: str
+    score: float
+    nb_pannes_7j: int
+    duree_arret_7j_s: float
+    jours_depuis_maintenance: int | None
+    niveau: str
+    recommandation: str
+
+
+class DemarrerMaintenanceRequest(BaseModel):
+    machine_id: int
+    type_maintenance: str = "PREVENTIVE"
+    description: str | None = None
+
+
+class ResoudreMaintenanceRequest(BaseModel):
+    machine_id: int
+    commentaire: str | None = None
 
 
 @router.get("", response_model=list[MaintenanceEventRead])
@@ -55,3 +81,46 @@ def lister(
         )
         for e in db.execute(stmt).scalars()
     ]
+
+
+@router.get("/risques", response_model=list[RisqueMachineRead])
+def lister_risques(db: Session = Depends(get_db)) -> list[RisqueMachineRead]:
+    return [
+        RisqueMachineRead(
+            machine_id=r.machine_id,
+            code=r.code,
+            nom=r.nom,
+            score=r.score,
+            nb_pannes_7j=r.nb_pannes_7j,
+            duree_arret_7j_s=r.duree_arret_7j_s,
+            jours_depuis_maintenance=r.jours_depuis_maintenance,
+            niveau=r.niveau,
+            recommandation=r.recommandation,
+        )
+        for r in analyser_risques(db)
+    ]
+
+
+@router.post("/demarrer")
+def api_demarrer_maintenance(req: DemarrerMaintenanceRequest) -> dict:
+    try:
+        msg = machine_command_service.demarrer_maintenance(
+            req.machine_id,
+            type_maintenance=req.type_maintenance,
+            description=req.description,
+        )
+        return {"status": "ok", "message": msg}
+    except MachineCommandError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@router.post("/resoudre")
+def api_resoudre_maintenance(req: ResoudreMaintenanceRequest) -> dict:
+    try:
+        msg = machine_command_service.resoudre_arret(
+            req.machine_id,
+            commentaire=req.commentaire,
+        )
+        return {"status": "ok", "message": msg}
+    except MachineCommandError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))

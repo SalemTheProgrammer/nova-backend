@@ -17,6 +17,58 @@ from app.models import LigneProduction, Machine, OrdreFabrication
 from app.services import chart_service, trs_service
 
 
+def _resumer_spec(spec: dict, periode_heures: int, dataset: str) -> str:
+    """Résumé chiffré du graphique, pour que l'agent le commente JUSTE.
+
+    L'agent ne « voit » pas l'image qu'il envoie : sans ces chiffres il commente
+    au hasard (ou écrit un placeholder du genre « tendance à confirmer »). On lui
+    rend donc l'essentiel de chaque série : début → fin, moyenne, extrêmes, et le
+    plus gros poste pour les graphiques triés (Pareto, rebuts, comparaisons).
+    """
+    unite = spec.get("unit") or ""
+    # Datasets catégoriels : l'intéressant est le classement, pas la chronologie.
+    categoriel = dataset in (
+        "pareto_arrets",
+        "rebuts_par_cause",
+        "trs_machines",
+        "stock_matieres",
+    )
+    lignes: list[str] = []
+    for serie in spec.get("series", []):
+        points = [p for p in serie.get("data", []) if p.get("y") is not None]
+        if not points:
+            continue
+        ys = [float(p["y"]) for p in points]
+        nom = serie.get("name") or "série"
+        haut = max(points, key=lambda p: float(p["y"]))
+        bas = min(points, key=lambda p: float(p["y"]))
+        if categoriel:
+            classement = sorted(points, key=lambda p: float(p["y"]), reverse=True)[:3]
+            details = [
+                "en tête : "
+                + ", ".join(f"{p.get('x')} {float(p['y']):.1f}{unite}" for p in classement),
+                f"plus bas : {bas.get('x')} {float(bas['y']):.1f}{unite}",
+                f"total {sum(ys):.0f}{unite}" if unite != "%" else "",
+            ]
+        else:
+            details = [
+                f"début {ys[0]:.1f}{unite} → fin {ys[-1]:.1f}{unite}",
+                f"moyenne {sum(ys) / len(ys):.1f}{unite}",
+                f"plus haut {float(haut['y']):.1f}{unite} à {haut.get('x')}",
+                f"plus bas {float(bas['y']):.1f}{unite} à {bas.get('x')}",
+                f"total {sum(ys):.0f}{unite}" if unite != "%" else "",
+            ]
+        lignes.append(f"{nom} : " + ", ".join(d for d in details if d))
+    if not lignes:
+        return ""
+    return (
+        f"Fenêtre {periode_heures} h. " + " | ".join(lignes) + " "
+        "Commente CES chiffres en une phrase (tendance, valeur clé, poste dominant) "
+        "et nomme les éléments cités : n'invente aucun chiffre, n'écris jamais de "
+        "placeholder, et ne recopie pas ce résumé technique tel quel."
+    )
+
+
 def _trouver_of(db, numero_ou_id: str) -> OrdreFabrication | None:
     of: OrdreFabrication | None = None
     if numero_ou_id.isdigit():
@@ -88,7 +140,9 @@ def generer_graphique(
                 "le graphique serait vide.",
                 None,
             )
-        return f"📊 Graphique affiché : {spec['title']}.", spec
+        # Texte rendu au modèle : des CHIFFRES, pas un libellé à recopier — il ne
+        # « voit » pas l'image qui part à l'opérateur (chat ou image WhatsApp).
+        return f"{spec['title']}. " + _resumer_spec(spec, periode_heures, dataset), spec
 
 
 @tool(response_format="content_and_artifact")

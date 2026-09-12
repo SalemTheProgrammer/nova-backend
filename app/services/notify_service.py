@@ -136,7 +136,7 @@ def envoyer_whatsapp(
     if reponse.status_code == 409:
         raise NotifyError(
             "Session WhatsApp non appairée : scannez le QR code affiché dans le "
-            "terminal du service WhatsApp (WhatsApp → Appareils connectés)."
+            "terminal du service WhatsApp (WhatsApp -> Appareils connectes)."
         )
     if reponse.status_code >= 400:
         detail = ""

@@ -34,6 +34,7 @@ from app.models.quality_event import QualityEvent
 from app.models.referentiel import (
     Article,
     Fournisseur,
+    FournisseurContact,
     LigneLien,
     LigneProduction,
     MatierePremiere,
@@ -70,6 +71,7 @@ __all__ = [
     "Article",
     "MatierePremiere",
     "Fournisseur",
+    "FournisseurContact",
     "LigneProduction",
     "Nomenclature",
     "NomenclatureLigne",

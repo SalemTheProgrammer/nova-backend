@@ -12,7 +12,7 @@ from langchain_core.runnables import RunnableConfig
 
 from app.agent.prompts import SYSTEM_PROMPT, VOICE_PROMPT_ADDENDUM, WHATSAPP_PROMPT_ADDENDUM
 from app.agent.state import AgentState
-from app.agent.tools import ALL_TOOLS
+from app.agent.tools import ALL_TOOLS, NAVIGATION_TOOLS
 from app.core.temps import heure_usine
 from app.services.llm import get_chat_model
 
@@ -80,6 +80,14 @@ def call_model(state: AgentState, config: RunnableConfig | None = None) -> dict:
         autorises = set(allowed)
         outils = [t for t in ALL_TOOLS if t.name in autorises]
         bloques = [t.name for t in ALL_TOOLS if t.name not in autorises]
+
+    # WhatsApp : aucun écran à piloter. Le prompt l'interdit déjà, mais un modèle
+    # léger appelle quand même `aller_a_la_page` (« et le stock ? ») et gaspille
+    # un tour pour un artifact que le canal jette. On retire l'outil du périmètre
+    # plutôt que de compter sur la consigne.
+    if state.get("mode") == "whatsapp":
+        noms_navigation = {t.name for t in NAVIGATION_TOOLS}
+        outils = [t for t in outils if t.name not in noms_navigation]
 
     model = get_chat_model().bind_tools(outils)
     now = heure_usine()

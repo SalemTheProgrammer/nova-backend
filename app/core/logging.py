@@ -10,6 +10,15 @@ from app.core.config import get_settings
 
 
 def configure_logging() -> None:
+    if sys.platform == "win32":
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(sys.stderr, "reconfigure"):
+                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
     settings = get_settings()
     level = getattr(logging, settings.log_level.upper(), logging.INFO)
 

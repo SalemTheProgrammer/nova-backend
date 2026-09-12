@@ -29,7 +29,7 @@ def _seed_machines_si_absentes(db) -> None:
     if existing is None:
         return
     if existing.temps_cycle_cible_s is None:
-        existing.temps_cycle_cible_s = Decimal("4.0")
+        existing.temps_cycle_cible_s = Decimal("1.0")
     ligne = db.query(LigneProduction).filter_by(code="LIGNE-COMP-01").first()
     if ligne is None or db.query(Machine).filter_by(code="M-01").first():
         return
@@ -162,7 +162,7 @@ def seed() -> None:
             code="PARA500",
             designation="Paracétamol 500 mg - Comprimés (boîte de 16)",
             unite=Unite.UN, type=TypeArticle.PF, actif=True,
-            temps_cycle_cible_s=Decimal("4.0"),
+            temps_cycle_cible_s=Decimal("1.0"),
             valeur_unitaire=Decimal("3.400"),  # TND / boîte
         )
         db.add(article)
