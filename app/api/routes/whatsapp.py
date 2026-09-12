@@ -20,7 +20,7 @@ import binascii
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 import httpx
 from pydantic import BaseModel, Field
 
@@ -54,6 +54,28 @@ async def whatsapp_qr_page() -> HTMLResponse:
         return HTMLResponse(
             content=f"<!DOCTYPE html><html><body style='font-family:sans-serif;background:#090d16;color:white;padding:2rem;text-align:center;'><h2>⚠️ Service WhatsApp indisponible</h2><p style='color:#94a3b8;'>{e}</p></body></html>",
             status_code=503,
+        )
+
+
+@public_router.get("/qr.svg")
+async def whatsapp_qr_svg_endpoint() -> Response:
+    """Retourne le QR code WhatsApp directement au format SVG."""
+    settings = get_settings()
+    url = f"{settings.whatsapp_service_url}/qr.svg"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url)
+            return Response(
+                content=resp.content,
+                status_code=resp.status_code,
+                media_type=resp.headers.get("content-type", "image/svg+xml"),
+                headers={"Cache-Control": "no-store"},
+            )
+    except Exception as e:
+        return Response(
+            content=f'<svg xmlns="http://www.w3.org/2000/svg" width="260" height="260"><text x="10" y="50" fill="red">Erreur: {e}</text></svg>',
+            status_code=503,
+            media_type="image/svg+xml",
         )
 
 
