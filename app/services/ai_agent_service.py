@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models import DowntimeEvent, Machine, OrdreFabrication
-from app.models.enums import StatutMachine, StatutOF
+from app.core.temps import heure_usine
+from app.models import AgentProposal, DowntimeEvent, Machine, OrdreFabrication
+from app.models.enums import StatutMachine, StatutOF, StatutProposition
 from app.services import trs_service
 
 
@@ -77,3 +78,26 @@ def generer_insights(db: Session) -> list[str]:
             insights.append("Aucune machine configurée pour le moment.")
 
     return insights
+
+
+def generer_accueil(db: Session) -> list[str]:
+    """Message d'accueil de Nova à l'ouverture du chat, en paragraphes : salutation,
+    constats atelier (`generer_insights`), puis les décisions du superviseur en
+    attente — présentées en cartes Oui/Non juste après dans le chat."""
+    heure = heure_usine().hour
+    salut = "Bonsoir" if heure >= 18 or heure < 5 else "Bonjour"
+    messages = [f"{salut} ! Voici ce que je vois sur l'atelier en ce moment :", *generer_insights(db)]
+
+    en_attente = db.scalar(
+        select(func.count())
+        .select_from(AgentProposal)
+        .where(AgentProposal.statut == StatutProposition.PROPOSEE)
+    ) or 0
+    if en_attente == 1:
+        messages.append("Une décision attend votre accord : je vous la présente juste en dessous.")
+    elif en_attente > 1:
+        messages.append(
+            f"{en_attente} décisions attendent votre accord : je vous présente les plus "
+            "récentes juste en dessous."
+        )
+    return messages

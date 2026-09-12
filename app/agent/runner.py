@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agent.graph import get_compiled_graph
+from app.agent.nodes.agent_node import PREFIXE_ACCUEIL
 from app.agent.tools.navigation import PAGES, TOOL_PAGE_MAP
 from app.core.config import get_settings
 from app.core.exceptions import AgentError
@@ -115,6 +116,25 @@ async def delete_thread(thread_id: str) -> None:
     bouton « effacer la conversation » du panneau de chat."""
     graph = get_compiled_graph()
     await graph.checkpointer.adelete_thread(thread_id)
+
+
+async def enregistrer_accueil(thread_id: str, messages: list[str]) -> bool:
+    """Écrit le message d'accueil de Nova comme PREMIER message du thread, pour
+    que l'agent sache ce qu'il a dit si l'opérateur y répond.
+
+    N'écrit rien (renvoie False) si le thread contient déjà des messages : un
+    accueil ne s'ajoute jamais au milieu d'une conversation.
+    """
+    graph = get_compiled_graph()
+    config = {"configurable": {"thread_id": thread_id}}
+    state = await graph.aget_state(config)
+    if state.values and state.values.get("messages"):
+        return False
+    accueil = AIMessage(content="\n\n".join(messages), id=f"{PREFIXE_ACCUEIL}{uuid.uuid4()}")
+    # as_node="agent" : un tour d'agent sans appel d'outil, le graphe est donc
+    # terminé et le prochain message opérateur repart de START normalement.
+    await graph.aupdate_state(config, {"messages": [accueil]}, as_node="agent")
+    return True
 
 
 async def get_thread_history(thread_id: str) -> list[dict]:

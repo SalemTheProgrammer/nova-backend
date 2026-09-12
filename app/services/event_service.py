@@ -1,6 +1,7 @@
-"""Point d'entrée unique d'ingestion des événements machine (simulateur -> DB).
+"""Point d'entrée unique d'ingestion des événements machine (automates -> DB).
 
-Chaque événement simulateur passe par `enregistrer_evenement` : écriture du log
+Chaque événement machine (traduit depuis la télémétrie Sparkplug B, voir
+`protocols/sparkplug_b/mapper.py`) passe par `enregistrer_evenement` : écriture du log
 (`MachineEvent`), application de la transition d'état, évaluation des alertes.
 Le TRS n'est jamais stocké : il est recalculé à la lecture depuis les logs
 (`trs_service`), donc il n'y a rien à invalider ici.
@@ -62,7 +63,7 @@ def enregistrer_evenement(
 
 def _notifier_ligne_liberee(db: Session, machine: Machine, of_termine_id: int | None) -> None:
     """Diffuse `ligne_liberee` avec le prochain OF en attente (sans démarrage auto)."""
-    # Imports paresseux : évite le cycle event_service ↔ simulator_service ↔ line_queue_service.
+    # Imports paresseux : évite un cycle d'import au chargement des modules.
     from app.services import broadcast_service, line_queue_service
 
     prochain = line_queue_service.prochain_of(db, machine.ligne_production_id)

@@ -190,7 +190,7 @@ def seed() -> None:
                 )
             )
 
-        # --- Machines (simulateur SCADA) ---
+        # --- Machines (pilotées par l'automate Sparkplug de même code) ---
         machines = [
             Machine(
                 code="M-01", nom="Comprimeuse rotative 1",

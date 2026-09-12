@@ -1,11 +1,14 @@
-"""Seed démo « riche » : beaucoup d'articles, deux nouvelles lignes contrastées
-(stock quasi-illimité vs stock à sec) et des données dans chaque table pour
-que le dashboard, le stock, les OF, les alertes et le superviseur autonome
-aient tous du contenu à afficher.
+"""Seed démo « riche » : beaucoup d'articles, deux lignes contrastées (stock
+quasi illimité vs stock à sec), fournisseurs, lots, nomenclatures, OF et
+généalogie matière — le référentiel et le stock dont le MES a besoin.
 
-Purement additif : ne touche à aucune ligne/article/machine/OF existant (le
-seed d'origine `app.db.seed` et `scripts.reset_machines_demo` restent
-intacts). Idempotent : si l'article IBU400 existe déjà, ne fait rien.
+Aucune donnée d'exécution inventée : les machines sont créées à l'arrêt, sans
+événement, arrêt, alerte ni proposition. Leur activité arrive par la télémétrie
+de leurs automates (usine simulée `simulator/` ou équipements réels), comme en
+production. Les OF déjà entamés sont repris en PLANIFIE avec leur reliquat.
+
+Purement additif : ne touche à aucune ligne/article/machine/OF existant.
+Idempotent : si l'article IBU400 existe déjà, ne fait rien.
 
 Run from the backend directory:
     python -m scripts.seed_demo_rich
@@ -18,11 +21,7 @@ from decimal import Decimal
 from app.db.session import SessionLocal, init_db
 from app.services.numbering import generer_numero_lot_produit
 from app.models import (
-    Alert,
-    AgentProposal,
     Article,
-    DocumentRag,
-    DowntimeEvent,
     Fournisseur,
     LigneProduction,
     LotMatierePremiere,
@@ -33,38 +32,8 @@ from app.models import (
     NomenclatureLigne,
     OFConsommationMP,
     OrdreFabrication,
-    QualityEvent,
 )
-from app.models.enums import (
-    CauseArret,
-    SeveriteAlerte,
-    StatutLot,
-    StatutMachine,
-    StatutOF,
-    StatutProposition,
-    TypeArticle,
-    TypeEvenementQualite,
-    TypeMouvement,
-    Unite,
-)
-
-FENETRE_S = 8 * 3600
-
-
-def _quantites(*, cycle_s: float, trs: float, tq: float, do: float) -> tuple[int, int, float]:
-    """Reconstruit (bonnes, rejets, duree_arret_s) pour atteindre le TRS visé
-    (mêmes formules que trs_service._calculer, fenêtre 8h). Copié de
-    scripts.reset_machines_demo pour ne pas coupler les deux scripts."""
-    tp = trs / (tq * do)
-    tr = float(FENETRE_S)
-    tf = do * tr
-    tn = tp * tf
-    tu = tq * tn
-    bonnes = round(tu / cycle_s)
-    total = round(tn / cycle_s)
-    rejets = max(0, total - bonnes)
-    duree_arret = tr - tf
-    return bonnes, rejets, duree_arret
+from app.models.enums import StatutLot, StatutOF, TypeArticle, TypeMouvement, Unite
 
 
 def seed() -> None:
@@ -550,70 +519,24 @@ def seed() -> None:
         db.flush()
 
         # ------------------------------------------------------------------
-        # Machines — 2 sur la ligne riche (tournent bien), 2 sur la pauvre
-        # (à l'arrêt / en panne, faute de matière).
+        # Machines — 2 sur la ligne riche, 2 sur la pauvre. Créées à l'arrêt et
+        # sans historique : leur activité arrive par la télémétrie de leur
+        # automate (device Sparkplug de même code), jamais inventée ici.
         # ------------------------------------------------------------------
         machines_spec = [
-            dict(code="M-07", nom="Comprimeuse rotative 2", ligne=ligne_riche, cycle=3.5,
-                 statut=StatutMachine.MARCHE, trs=0.88, tq=0.97, do=1.0,
-                 cause_arret=CauseArret.MICRO_ARRET, cout_horaire="220"),
-            dict(code="M-08", nom="Remplisseuse sirop 1", ligne=ligne_riche, cycle=2.8,
-                 statut=StatutMachine.MARCHE, trs=0.80, tq=0.95, do=0.97,
-                 cause_arret=CauseArret.CHANGEMENT_SERIE, cout_horaire="180"),
-            dict(code="M-09", nom="Doseuse poudre 1", ligne=ligne_pauvre, cycle=4.5,
-                 statut=StatutMachine.ARRET, trs=0.15, tq=0.85, do=0.25,
-                 cause_arret=CauseArret.ATTENTE_MATIERE, cout_horaire="140"),
-            dict(code="M-10", nom="Conditionneuse sachets 1", ligne=ligne_pauvre, cycle=4.0,
-                 statut=StatutMachine.PANNE, trs=0.05, tq=0.70, do=0.10,
-                 cause_arret=CauseArret.ATTENTE_MATIERE, cout_horaire="160"),
+            ("M-07", "Comprimeuse rotative 2", ligne_riche, "3.5", "220"),
+            ("M-08", "Remplisseuse sirop 1", ligne_riche, "2.8", "180"),
+            ("M-09", "Doseuse poudre 1", ligne_pauvre, "4.5", "140"),
+            ("M-10", "Conditionneuse sachets 1", ligne_pauvre, "4.0", "160"),
         ]
-        machines = {}
-        for spec in machines_spec:
-            bonnes, rejets, duree_arret = _quantites(
-                cycle_s=spec["cycle"], trs=spec["trs"], tq=spec["tq"], do=spec["do"]
-            )
-            machine = Machine(
-                code=spec["code"], nom=spec["nom"], ligne_production_id=spec["ligne"].id,
-                statut=spec["statut"], temps_cycle_cible_s=Decimal(str(spec["cycle"])),
-                cout_horaire=Decimal(spec["cout_horaire"]),
-                dernier_evenement_at=maintenant,
-            )
-            db.add(machine)
-            db.flush()
-            machines[spec["code"]] = machine
-
+        for code, nom, ligne, cycle, cout_horaire in machines_spec:
             db.add(
-                QualityEvent(
-                    machine_id=machine.id, type=TypeEvenementQualite.BONNE,
-                    quantite=bonnes, created_at=maintenant - timedelta(minutes=5),
+                Machine(
+                    code=code, nom=nom, ligne_production_id=ligne.id,
+                    temps_cycle_cible_s=Decimal(cycle), cout_horaire=Decimal(cout_horaire),
                 )
             )
-            if rejets > 0:
-                db.add(
-                    QualityEvent(
-                        machine_id=machine.id, type=TypeEvenementQualite.REBUT,
-                        quantite=rejets, created_at=maintenant - timedelta(minutes=4),
-                    )
-                )
-            if duree_arret > 1:
-                actif = spec["statut"] in (StatutMachine.PANNE, StatutMachine.ARRET)
-                if actif:
-                    start = maintenant - timedelta(seconds=duree_arret)
-                    end = None
-                else:
-                    end = maintenant - timedelta(minutes=10)
-                    start = end - timedelta(seconds=duree_arret)
-                db.add(
-                    DowntimeEvent(
-                        machine_id=machine.id, cause=spec["cause_arret"],
-                        operator_comment=(
-                            "Matière première indisponible — en attente de réapprovisionnement."
-                            if spec["cause_arret"] == CauseArret.ATTENTE_MATIERE else None
-                        ),
-                        start_time=start, end_time=end,
-                    )
-                )
-            print(f"{spec['code']} {spec['nom']}: bonnes={bonnes} rejets={rejets} arret_s={duree_arret:.0f}")
+        db.flush()
 
         # ------------------------------------------------------------------
         # Ordres de fabrication
@@ -669,13 +592,13 @@ def seed() -> None:
         )
         ofs["AMOX500"] = _creer_of(
             numero="OF-2026-00104", article_code="AMOX500", nomenclatures=nomenclatures_riche,
-            ligne=ligne_riche, statut=StatutOF.EN_COURS, planifiee=Decimal("800"),
+            ligne=ligne_riche, statut=StatutOF.PLANIFIE, planifiee=Decimal("800"),
             bonne=Decimal("320"), rejetee=Decimal("10"),
             jours_debut=-1, jours_fin=1, debut_reel=maintenant - timedelta(hours=18),
         )
         ofs["MULTIVIT-GEL"] = _creer_of(
             numero="OF-2026-00105", article_code="MULTIVIT-GEL", nomenclatures=nomenclatures_riche,
-            ligne=ligne_riche, statut=StatutOF.EN_COURS, planifiee=Decimal("1200"),
+            ligne=ligne_riche, statut=StatutOF.PLANIFIE, planifiee=Decimal("1200"),
             bonne=Decimal("540"), rejetee=Decimal("15"),
             jours_debut=-1, jours_fin=1, debut_reel=maintenant - timedelta(hours=10),
         )
@@ -711,7 +634,7 @@ def seed() -> None:
         )
         ofs["CREME-DERM"] = _creer_of(
             numero="OF-2026-00112", article_code="CREME-DERM", nomenclatures=nomenclatures_pauvre,
-            ligne=ligne_pauvre, statut=StatutOF.EN_COURS, planifiee=Decimal("500"),
+            ligne=ligne_pauvre, statut=StatutOF.PLANIFIE, planifiee=Decimal("500"),
             bonne=Decimal("40"), rejetee=Decimal("5"),
             jours_debut=-1, jours_fin=1, debut_reel=maintenant - timedelta(hours=14),
         )
@@ -724,10 +647,6 @@ def seed() -> None:
             ligne=ligne_pauvre, statut=StatutOF.BROUILLON, planifiee=Decimal("300"),
         )
         db.flush()
-
-        # Les deux machines de la ligne pauvre bossent (en vain) sur l'OF bloqué.
-        machines["M-09"].ordre_fabrication_id = ofs["CREME-DERM"].id
-        machines["M-10"].ordre_fabrication_id = ofs["CREME-DERM"].id
 
         # ------------------------------------------------------------------
         # Généalogie de consommation MP pour les OF terminés (ligne riche) :
@@ -773,233 +692,12 @@ def seed() -> None:
             (mp_riche["BLISTER-R"].id, "1"), (mp_riche["ETUI-R"].id, "1"),
         ], Decimal("998"))
 
-        # ------------------------------------------------------------------
-        # Maintenance
-        # ------------------------------------------------------------------
-        from app.models.maintenance_event import MaintenanceEvent
-        from app.models.enums import TypeMaintenance
-
-        db.add_all([
-            MaintenanceEvent(
-                machine_id=machines["M-07"].id, type=TypeMaintenance.PREVENTIVE,
-                description="Graissage et contrôle des poinçons — maintenance planifiée.",
-                start_time=maintenant - timedelta(days=20), end_time=maintenant - timedelta(days=20) + timedelta(hours=2),
-                prochaine_maintenance=aujourdhui + timedelta(days=70),
-            ),
-            MaintenanceEvent(
-                machine_id=machines["M-10"].id, type=TypeMaintenance.CORRECTIVE,
-                description="Panne convoyeur — pièce détachée en commande.",
-                start_time=maintenant - timedelta(hours=6), end_time=None,
-                prochaine_maintenance=None,
-            ),
-        ])
-
-        # ------------------------------------------------------------------
-        # Alertes
-        # ------------------------------------------------------------------
-        db.add_all([
-            Alert(
-                machine_id=machines["M-09"].id, severity=SeveriteAlerte.CRITICAL,
-                type="stock_epuise",
-                message="Stock de MP-TALC (Talc pharmaceutique) épuisé — ligne LIGNE-COND-04 à l'arrêt.",
-                created_at=maintenant - timedelta(hours=6), resolved=False,
-            ),
-            Alert(
-                ordre_fabrication_id=ofs["CREME-DERM"].id, severity=SeveriteAlerte.CRITICAL,
-                type="stock_epuise",
-                message="Stock de MP-CREME-BASE épuisé — OF CREME-DERM bloqué.",
-                created_at=maintenant - timedelta(hours=5), resolved=False,
-            ),
-            Alert(
-                severity=SeveriteAlerte.WARNING, type="stock_bas",
-                message="Stock de MP-VITC sous le seuil d'alerte (350 G restants sur 20000).",
-                created_at=maintenant - timedelta(hours=4), resolved=False,
-            ),
-            Alert(
-                severity=SeveriteAlerte.WARNING, type="stock_bas",
-                message="Stock de MP-COLORANT sous le seuil d'alerte (15 ML restants sur 2000).",
-                created_at=maintenant - timedelta(hours=3), resolved=False,
-            ),
-            Alert(
-                machine_id=machines["M-10"].id, severity=SeveriteAlerte.CRITICAL,
-                type="machine_panne",
-                message="M-10 (Conditionneuse sachets 1) en panne — attente pièce détachée.",
-                created_at=maintenant - timedelta(hours=6), resolved=False,
-            ),
-            Alert(
-                machine_id=machines["M-08"].id, severity=SeveriteAlerte.WARNING,
-                type="machine_arret",
-                message="M-08 (Remplisseuse sirop 1) : micro-arrêt résolu automatiquement.",
-                created_at=maintenant - timedelta(hours=2), resolved=True,
-                resolved_at=maintenant - timedelta(hours=1, minutes=55),
-            ),
-            Alert(
-                machine_id=machines["M-07"].id, severity=SeveriteAlerte.INFO,
-                type="maintenance_terminee",
-                message="Maintenance préventive terminée sur M-07 (Comprimeuse rotative 2).",
-                created_at=maintenant - timedelta(days=20) + timedelta(hours=2), resolved=True,
-                resolved_at=maintenant - timedelta(days=20) + timedelta(hours=2, minutes=5),
-            ),
-            Alert(
-                machine_id=machines["M-09"].id, severity=SeveriteAlerte.WARNING,
-                type="derive_qualite",
-                message="M-09 (Doseuse poudre 1) : taux de rebut élevé avant l'arrêt (matière hors spec).",
-                created_at=maintenant - timedelta(hours=7), resolved=False,
-            ),
-        ])
-
-        # ------------------------------------------------------------------
-        # Propositions du superviseur autonome — les 5 statuts, actions
-        # cohérentes avec app.services.supervisor_service.
-        # ------------------------------------------------------------------
-        db.add_all([
-            AgentProposal(
-                cle_dedup=f"stock_bas:{mp_pauvre['TALC'].id}", type="stock_bas",
-                severite=SeveriteAlerte.WARNING,
-                titre=f"Stock bas : MP-TALC (0 G)",
-                diagnostic=(
-                    "Le stock de MP-TALC (Talc pharmaceutique) est descendu à 0 G, sous le "
-                    "seuil d'alerte de 15000 G. Fournisseur connu : Pharma Excipients "
-                    "International (commandes@pharmaexcip.com). Je recommande de créer "
-                    "l'alerte de réapprovisionnement et de le prévenir."
-                ),
-                action_libelle="Créer l'alerte de réapprovisionnement et prévenir Pharma Excipients International",
-                action={
-                    "type": "alerte_reappro", "matiere_premiere_id": mp_pauvre["TALC"].id,
-                    "fournisseur_nom": "Pharma Excipients International",
-                    "fournisseur_contact": "commandes@pharmaexcip.com",
-                },
-                statut=StatutProposition.PROPOSEE,
-                created_at=maintenant - timedelta(hours=6),
-            ),
-            AgentProposal(
-                cle_dedup=f"stock_bas:{mp_pauvre['CREME-BASE'].id}", type="stock_bas",
-                severite=SeveriteAlerte.WARNING,
-                titre="Stock bas : MP-CREME-BASE (0 KG)",
-                diagnostic=(
-                    "Le stock de MP-CREME-BASE (base crème dermatologique) est descendu à "
-                    "0 KG, sous le seuil d'alerte de 50 KG. Je recommande de créer l'alerte "
-                    "de réapprovisionnement et de prévenir Pharma Excipients International."
-                ),
-                action_libelle="Créer l'alerte de réapprovisionnement et prévenir Pharma Excipients International",
-                action={
-                    "type": "alerte_reappro", "matiere_premiere_id": mp_pauvre["CREME-BASE"].id,
-                    "fournisseur_nom": "Pharma Excipients International",
-                    "fournisseur_contact": "commandes@pharmaexcip.com",
-                },
-                statut=StatutProposition.APPROUVEE,
-                resultat="Fournisseur contacté par email — livraison annoncée sous 5 jours.",
-                created_at=maintenant - timedelta(hours=5, minutes=30),
-                decided_at=maintenant - timedelta(hours=5),
-            ),
-            AgentProposal(
-                cle_dedup=f"maintenance_urgence:{machines['M-10'].id}", type="maintenance_urgence",
-                severite=SeveriteAlerte.CRITICAL,
-                titre="Panne bloquante sur M-10 (Conditionneuse sachets 1)",
-                diagnostic=(
-                    "M-10 est en panne depuis plusieurs heures, bloquant l'OF-2026-00112 "
-                    "(CREME-DERM). Je recommande une maintenance d'urgence."
-                ),
-                action_libelle="Lancer une maintenance d'urgence sur M-10",
-                action={"type": "maintenance_urgence", "machine_id": machines["M-10"].id},
-                statut=StatutProposition.EXECUTEE,
-                resultat="Maintenance d'urgence lancée, technicien sur site.",
-                created_at=maintenant - timedelta(hours=6),
-                decided_at=maintenant - timedelta(hours=5, minutes=45),
-            ),
-            AgentProposal(
-                cle_dedup=f"maintenance_urgence:{machines['M-10'].id}:v2", type="maintenance_urgence",
-                severite=SeveriteAlerte.CRITICAL,
-                titre="Deuxième tentative — pièce détachée manquante sur M-10",
-                diagnostic=(
-                    "La maintenance d'urgence sur M-10 ne peut pas aboutir : la pièce "
-                    "détachée nécessaire n'est pas en stock à l'atelier."
-                ),
-                action_libelle="Commander la pièce détachée en urgence",
-                action={"type": "maintenance_urgence", "machine_id": machines["M-10"].id},
-                statut=StatutProposition.ECHOUEE,
-                resultat="Échec : pièce détachée indisponible en stock atelier.",
-                created_at=maintenant - timedelta(hours=4),
-                decided_at=maintenant - timedelta(hours=3, minutes=50),
-            ),
-            AgentProposal(
-                cle_dedup=f"risque_panne:{machines['M-09'].id}:{aujourdhui:%Y%m%d}",
-                type="maintenance_preventive", severite=SeveriteAlerte.WARNING,
-                titre="Risque de panne élevé sur M-09 (Doseuse poudre 1)",
-                diagnostic=(
-                    "M-09 affiche un risque de panne élevé : plusieurs micro-arrêts sur 7 "
-                    "jours, jamais maintenue. Je recommande de planifier une maintenance "
-                    "préventive."
-                ),
-                action_libelle="Planifier une maintenance préventive sur M-09",
-                action={"type": "maintenance_preventive", "machine_id": machines["M-09"].id},
-                statut=StatutProposition.REJETEE,
-                resultat="Reporté : priorité donnée au réapprovisionnement matière.",
-                created_at=maintenant - timedelta(hours=7),
-                decided_at=maintenant - timedelta(hours=6, minutes=40),
-            ),
-            AgentProposal(
-                cle_dedup=f"stock_bas:{mp_pauvre['VITC'].id}", type="stock_bas",
-                severite=SeveriteAlerte.WARNING,
-                titre="Stock bas : MP-VITC (350 G)",
-                diagnostic=(
-                    "Le stock de MP-VITC (vitamine C) est descendu à 350 G, sous le seuil "
-                    "d'alerte de 20000 G. Fournisseur connu : API Import Maghreb. Je "
-                    "recommande de créer l'alerte de réapprovisionnement."
-                ),
-                action_libelle="Créer l'alerte de réapprovisionnement et prévenir API Import Maghreb",
-                action={
-                    "type": "alerte_reappro", "matiere_premiere_id": mp_pauvre["VITC"].id,
-                    "fournisseur_nom": "API Import Maghreb",
-                    "fournisseur_contact": "ventes@apimaghreb.com",
-                },
-                statut=StatutProposition.PROPOSEE,
-                created_at=maintenant - timedelta(hours=4),
-            ),
-        ])
-
-        # ------------------------------------------------------------------
-        # Documents (métadonnées RAG — pas d'indexation Pinecone réelle ici)
-        # ------------------------------------------------------------------
-        db.add_all([
-            DocumentRag(
-                nom="BPF - Bonnes Pratiques de Fabrication (Guide UE)",
-                fichier="bpf_guide_ue_2024.pdf", categorie="norme",
-                nb_pages=180, nb_chunks=420, statut="INDEXEE", vector_ids=[],
-            ),
-            DocumentRag(
-                nom="Procédure de nettoyage ligne comprimés",
-                fichier="procedure_nettoyage_ligne_comprimes.pdf", categorie="procédure",
-                nb_pages=12, nb_chunks=28, statut="INDEXEE", vector_ids=[],
-            ),
-            DocumentRag(
-                nom="Manuel machine - Comprimeuse rotative",
-                fichier="manuel_comprimeuse_rotative.pdf", categorie="manuel machine",
-                nb_pages=64, nb_chunks=150, statut="INDEXEE", vector_ids=[],
-            ),
-            DocumentRag(
-                nom="Fiche technique - Ibuprofène 400 mg",
-                fichier="fiche_technique_ibuprofene_400.pdf", categorie="fiche technique",
-                nb_pages=4, nb_chunks=9, statut="INDEXEE", vector_ids=[],
-            ),
-            DocumentRag(
-                nom="Procédure de gestion des lots périmés",
-                fichier="procedure_gestion_lots_perimes.pdf", categorie="procédure",
-                nb_pages=8, nb_chunks=18, statut="INDEXEE", vector_ids=[],
-            ),
-            DocumentRag(
-                nom="Plan HACCP - Ligne conditionnement",
-                fichier="plan_haccp_conditionnement.pdf", categorie="norme",
-                nb_pages=45, nb_chunks=95, statut="INDEXEE", vector_ids=[],
-            ),
-        ])
-
         db.commit()
         print(
             "Seed démo riche créé : 5 fournisseurs + 2 lignes (riche/pauvre) + "
             "18 matières premières + 29 lots + 14 articles/nomenclatures + "
-            "4 machines + 14 OF + généalogie de conso + mouvements de stock + "
-            "maintenance + 8 alertes + 6 propositions + 6 documents."
+            "4 machines (à l'arrêt, sans historique) + 14 OF + généalogie de "
+            "consommation + mouvements de stock."
         )
     finally:
         db.close()

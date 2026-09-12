@@ -1,4 +1,4 @@
-"""Machines : liste, détail, timeline d'événements — état SCADA temps réel."""
+"""Machines : liste, détail, timeline d'événements — état temps réel."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -8,9 +8,9 @@ from sqlalchemy.orm import Session
 from app.core.access import require_category
 from app.core.security import require_api_key
 from app.db.session import get_db
-from app.models import DowntimeEvent, Machine, MachineEvent
-from app.schemas.machine_schema import DowntimeActifRead, MachineEventRead, MachineRead
-from app.services import trs_service
+from app.models import Machine, MachineEvent
+from app.schemas.machine_schema import MachineEventRead, MachineRead
+from app.services.machine_read_service import machine_read
 
 router = APIRouter(
     prefix="/machines",
@@ -20,47 +20,6 @@ router = APIRouter(
         Depends(require_category("Supervision / MES", "Actions machine")),
     ],
 )
-
-
-def _downtime_actif(db: Session, machine_id: int) -> DowntimeActifRead | None:
-    d = db.execute(
-        select(DowntimeEvent)
-        .where(DowntimeEvent.machine_id == machine_id, DowntimeEvent.end_time.is_(None))
-        .order_by(DowntimeEvent.start_time.desc())
-    ).scalars().first()
-    if d is None:
-        return None
-    return DowntimeActifRead(
-        id=d.id, cause=d.cause, operator_comment=d.operator_comment, start_time=d.start_time
-    )
-
-
-def machine_read(db: Session, machine: Machine) -> MachineRead:
-    trs = None
-    if machine.temps_cycle_cible_s:
-        resultat = trs_service.calculer_trs_machine(db, machine)
-        trs = resultat
-
-    return MachineRead(
-        id=machine.id,
-        code=machine.code,
-        nom=machine.nom,
-        ligne_production_id=machine.ligne_production_id,
-        temps_cycle_cible_s=machine.temps_cycle_cible_s,
-        statut=machine.statut,
-        ordre_fabrication_id=machine.ordre_fabrication_id,
-        numero_of_actif=machine.ordre_fabrication.numero if machine.ordre_fabrication else None,
-        temps_cycle_actuel_s=machine.temps_cycle_actuel_s,
-        quantite_produite=machine.quantite_produite,
-        quantite_bonne=machine.quantite_bonne,
-        quantite_rejetee=machine.quantite_rejetee,
-        dernier_evenement_at=machine.dernier_evenement_at,
-        downtime_actif=_downtime_actif(db, machine.id),
-        trs=trs.trs if trs else None,
-        tq=trs.tq if trs else None,
-        tp=trs.tp if trs else None,
-        do=trs.do if trs else None,
-    )
 
 
 def _get_or_404(db: Session, machine_id: int) -> Machine:

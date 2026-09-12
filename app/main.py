@@ -75,16 +75,23 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services.scheduler_service import boucle_envois_planifies
 
     background_tasks.append(asyncio.create_task(boucle_envois_planifies()))
-    if settings.auto_sim_autostart:
-        from app.services.auto_simulator import auto_simulator
 
-        auto_simulator.demarrer()
+    # Hôte Sparkplug B : télémétrie des automates + commandes machine (MQTT).
+    from app.protocols.sparkplug_b import runtime
+
+    sparkplug_host = None
+    if settings.mqtt_enabled:
+        from app.protocols.sparkplug_b.host import SparkplugHost
+
+        sparkplug_host = SparkplugHost(settings)
+        runtime.set_host(sparkplug_host)
+        sparkplug_host.start()
 
     yield
 
-    from app.services.auto_simulator import auto_simulator
-
-    auto_simulator.arreter()
+    if sparkplug_host is not None:
+        runtime.set_host(None)
+        await asyncio.to_thread(sparkplug_host.stop)
     for task in background_tasks:
         task.cancel()
     await checkpointer_cm.__aexit__(None, None, None)
@@ -133,10 +140,6 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.api_prefix)
-
-    from app.api.routes.console import router as console_router
-
-    app.include_router(console_router)
 
     from app.websockets.dashboard_ws import register_websocket_routes
 

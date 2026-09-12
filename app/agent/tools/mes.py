@@ -11,7 +11,7 @@ from sqlalchemy import select
 from app.db.session import session_scope
 from app.models import Alert, DowntimeEvent, Machine, OrdreFabrication
 from app.models.referentiel import LigneProduction
-from app.services import cost_service, trs_service
+from app.services import cost_service, machine_read_service, trs_service
 
 _LIBELLE_PERTE = {
     "disponibilite": "la disponibilité",
@@ -65,6 +65,14 @@ def etat_machine(code_ou_id: str) -> tuple[str, dict | None]:
             "quantite_bonne": machine.quantite_bonne,
             "quantite_rejetee": machine.quantite_rejetee,
         }
+        # Employé badgé au poste (Operator/Id + Operator/Name publiés par l'automate).
+        operateur = machine_read_service.operateur_au_poste(db, machine.id)
+        lignes.append(
+            f"Opérateur au poste : {operateur.nom or operateur.matricule} (badge {operateur.matricule})"
+            if operateur is not None
+            else "Opérateur au poste : personne (aucun badge présenté, ou automate hors ligne)"
+        )
+        artifact["operateur"] = operateur.model_dump() if operateur is not None else None
         if machine.temps_cycle_cible_s:
             cadence_nominale = 3600 / float(machine.temps_cycle_cible_s)
             lignes.append(

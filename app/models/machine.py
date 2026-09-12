@@ -1,4 +1,4 @@
-"""Machine: état SCADA courant d'une machine simulée."""
+"""Machine : état courant d'une machine, alimenté par son automate (Sparkplug B)."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -15,7 +15,11 @@ from app.models.referentiel import LigneProduction
 
 
 class Machine(Base, TimestampMixin):
-    """Machine physique (simulée) rattachée à une ligne de production."""
+    """Machine physique rattachée à une ligne de production.
+
+    Son état (`statut`, compteurs, temps de cycle) n'est écrit que par le
+    journal d'événements, lui-même alimenté par la télémétrie de l'automate.
+    """
 
     __tablename__ = "machine"
 

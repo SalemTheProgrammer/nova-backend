@@ -1,4 +1,4 @@
-"""Transitions d'état machine appliquées pour chaque type d'événement simulateur.
+"""Transitions d'état machine appliquées pour chaque type d'événement machine.
 
 Chaque fonction mute la `Machine` (et au besoin l'`OrdreFabrication` actif) et écrit les
 enregistrements associés (arrêt, qualité, maintenance). N'effectue aucun commit : l'appelant
@@ -98,10 +98,13 @@ def appliquer(
 
     elif type_evenement == TypeEvenementMachine.MACHINE_STOPPED:
         machine.statut = StatutMachine.ARRET
-        _ouvrir_arret(db, machine, cause=CauseArret.AUTRE, comment="Arrêt manuel machine")
+        _ouvrir_arret(
+            db, machine, cause=CauseArret.AUTRE, comment=payload.get("comment") or "Arrêt machine"
+        )
 
     elif type_evenement == TypeEvenementMachine.MACHINE_IDLE:
-        pass  # informational only — pas de changement d'état/downtime en v1
+        # Pause courte signalée par l'automate : pas d'arrêt déclaré.
+        machine.statut = StatutMachine.PAUSE
 
     elif type_evenement == TypeEvenementMachine.MACHINE_ALARM:
         machine.statut = StatutMachine.PANNE

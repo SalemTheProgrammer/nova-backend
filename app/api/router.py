@@ -15,6 +15,7 @@ from app.api.routes import (
     lignes,
     matieres,
     ordres,
+    routes_admin_atelier,
     routes_ligne_flux,
     routes_agent,
     routes_downtime,
@@ -23,7 +24,6 @@ from app.api.routes import (
     routes_maintenance,
     routes_prelevement,
     routes_quality,
-    routes_simulator,
     routes_sparkplug,
     routes_voice,
     stock,
@@ -34,6 +34,7 @@ api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(auth.router)
 api_router.include_router(admin_users.router)
+api_router.include_router(routes_admin_atelier.router)
 api_router.include_router(audit.router)
 api_router.include_router(chat.router)
 api_router.include_router(articles.router)
@@ -45,7 +46,6 @@ api_router.include_router(routes_ligne_flux.router)
 api_router.include_router(ordres.router)
 api_router.include_router(documents.router)
 api_router.include_router(routes_machines.router)
-api_router.include_router(routes_simulator.router)
 api_router.include_router(routes_downtime.router)
 api_router.include_router(routes_quality.router)
 api_router.include_router(routes_maintenance.router)

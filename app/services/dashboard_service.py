@@ -7,7 +7,6 @@ usine complète.
 """
 from __future__ import annotations
 
-import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
@@ -40,6 +39,7 @@ CAUSES_PLANIFIEES = {
     CauseArret.CHANGEMENT_SERIE,
     CauseArret.REGLAGE_MACHINE,
     CauseArret.NETTOYAGE,
+    CauseArret.PRELEVEMENT_QUALITE,
 }
 CAUSES_MICRO = {CauseArret.MICRO_ARRET}
 
@@ -398,45 +398,31 @@ def construire_historique_oee(
         if fin <= debut:
             continue
         resultat = trs_service.calculer_trs_ligne(db, machines, depuis=debut, jusqua=fin)
-        a_des_donnees = resultat is not None and (
-            resultat.quantite_bonne + resultat.quantite_rejetee > 0
-        )
-        if a_des_donnees:
-            disponibilite, performance, qualite, trs = (
-                resultat.do,
-                resultat.tp,
-                resultat.tq,
-                resultat.trs,
+        if resultat is None or (resultat.quantite_bonne + resultat.quantite_rejetee <= 0):
+            # Créneau sans production : TRS et ses composantes sont à 0.
+            # Conserver le point assure une ligne temporelle complète et continue.
+            points.append(
+                PointOEE(
+                    label=debut.strftime(fmt),
+                    horodatage=fin,
+                    disponibilite=Decimal("0"),
+                    performance=Decimal("0"),
+                    qualite=Decimal("0"),
+                    trs=Decimal("0"),
+                )
             )
         else:
-            # Aucun événement qualité sur ce bucket (ligne pas encore instrumentée
-            # à cette date) : on comble avec un point plausible et stable (seedé
-            # sur la ligne + le bucket, donc identique à chaque rafraîchissement)
-            # plutôt que de casser la courbe avec un trou ou un 0 artificiel.
-            disponibilite, performance, qualite, trs = _point_oee_demo(
-                f"{ligne_id}-{debut.isoformat()}"
+            points.append(
+                PointOEE(
+                    label=debut.strftime(fmt),
+                    horodatage=fin,
+                    disponibilite=resultat.do,
+                    performance=resultat.tp,
+                    qualite=resultat.tq,
+                    trs=resultat.trs,
+                )
             )
-        points.append(
-            PointOEE(
-                label=debut.strftime(fmt),
-                horodatage=fin,
-                disponibilite=disponibilite,
-                performance=performance,
-                qualite=qualite,
-                trs=trs,
-            )
-        )
     return points
-
-
-def _point_oee_demo(seed: str) -> tuple[Decimal, Decimal, Decimal, Decimal]:
-    """Point D/P/Q plausible pour un bucket sans données réelles, stable par seed."""
-    rng = random.Random(seed)
-    disponibilite = Decimal(str(round(rng.uniform(0.80, 0.95), 3)))
-    performance = Decimal(str(round(rng.uniform(0.78, 0.93), 3)))
-    qualite = Decimal(str(round(rng.uniform(0.95, 0.99), 3)))
-    trs = (disponibilite * performance * qualite).quantize(Decimal("0.001"))
-    return disponibilite, performance, qualite, trs
 
 
 def _activite_recente(

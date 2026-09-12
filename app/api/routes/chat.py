@@ -1,17 +1,32 @@
 """Chat (agent) endpoints."""
 from __future__ import annotations
 
-import orjson
+import asyncio
+import uuid
 from collections.abc import AsyncIterator
 
+import orjson
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 
-from app.agent.runner import delete_thread, get_thread_history, run_agent, stream_agent
+from app.agent.runner import (
+    delete_thread,
+    enregistrer_accueil,
+    get_thread_history,
+    run_agent,
+    stream_agent,
+)
 from app.core.security import get_current_user
+from app.db.session import session_scope
 from app.models.utilisateur import Utilisateur
-from app.schemas.chat import ChatHistoryResponse, ChatRequest, ChatResponse
-from app.services import auth_service
+from app.schemas.chat import (
+    ChatAccueilRequest,
+    ChatAccueilResponse,
+    ChatHistoryResponse,
+    ChatRequest,
+    ChatResponse,
+)
+from app.services import ai_agent_service, auth_service
 
 router = APIRouter(tags=["agent"])
 
@@ -44,6 +59,24 @@ async def chat_clear(thread_id: str, user: Utilisateur = Depends(get_current_use
     """Efface définitivement l'historique d'un thread (bouton « effacer la
     conversation » du panneau de chat)."""
     await delete_thread(thread_id)
+
+
+def _accueil_depuis_atelier() -> list[str]:
+    with session_scope() as db:
+        return ai_agent_service.generer_accueil(db)
+
+
+@router.post("/chat/accueil", response_model=ChatAccueilResponse)
+async def chat_accueil(
+    payload: ChatAccueilRequest, user: Utilisateur = Depends(get_current_user)
+) -> ChatAccueilResponse:
+    """Message d'accueil de Nova pour une conversation vide (salutation, constats
+    atelier, décisions en attente). Enregistré comme premier message du thread :
+    l'agent sait ce qu'il a dit si l'opérateur y répond."""
+    thread_id = payload.thread_id or str(uuid.uuid4())
+    messages = await asyncio.to_thread(_accueil_depuis_atelier)
+    await enregistrer_accueil(thread_id, messages)
+    return ChatAccueilResponse(thread_id=thread_id, messages=messages)
 
 
 def _sse(event: dict) -> str:

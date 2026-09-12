@@ -252,10 +252,8 @@ def creer_ordre_fabrication(
             "   Matières premières consommées (FEFO) :",
             *conso,
             "",
-            "⚠ Cet OF n'apparaîtra dans le jumeau numérique et ne sera visible en production "
-            "qu'après : 1) affectation d'une ligne, puis 2) son lancement effectif sur une "
-            "machine (outil `lancer_of_maintenant`). Tant que le statut reste PLANIFIÉ, "
-            "aucune animation n'est visible dans le twin.",
+            "⚠ Cet OF ne sera visible en production qu'après : 1) affectation d'une ligne, "
+            "puis 2) son lancement effectif sur une machine (outil `lancer_of_maintenant`).",
         ]
 
     # Hors du `with` : l'OF est commité, la page Ordres peut le recharger.

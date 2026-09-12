@@ -27,9 +27,10 @@ from app.services import (
     cost_service,
     line_queue_service,
     line_scoring_service,
+    machine_command_service,
+    production_control_service,
     report_service,
     risk_service,
-    simulator_service,
 )
 from app.services.line_queue_service import DispositionPreemption
 
@@ -418,29 +419,36 @@ def demarrer_machine(
         machine = _trouver_machine(db, code_ou_id)
         if machine is None:
             return f"Machine introuvable : {code_ou_id}", None
-        # Signature du garde-fou sur l'ID CANONIQUE, pas sur la chaîne fournie :
-        # « M-01 » à la proposition puis « 1 » à la confirmation doivent matcher
-        # (sinon le garde-fou redemande une confirmation déjà donnée).
-        libelle = f"démarrer la machine {machine.code}"
-        if not confirmation_gate.evaluer(
-            config,
-            "demarrer_machine",
-            {"machine_id": machine.id, "of": ordre_fabrication_id},
-            confirmation,
-        ):
-            return _demande_confirmation(libelle)
-        try:
-            simulator_service.demarrer(db, machine, ordre_fabrication_id=ordre_fabrication_id)
-        except AppError as exc:
-            return f"❌ {exc.message}", None
-        # Commit avant diffusion : le frontend réagit au message WS par une
-        # relecture REST immédiate (useTwinBinding.ts) — si elle arrive avant
-        # que la transaction soit validée, elle lit encore l'ancien état et
-        # l'affichage ne se met à jour qu'au polling suivant (jusqu'à 15 s plus tard).
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        of_txt = f" avec l'OF id={ordre_fabrication_id}" if ordre_fabrication_id else ""
-        return f"✅ Machine {machine.code} démarrée{of_txt}.", _action_executee(libelle)
+        # L'OF est résolu AVANT la confirmation, pour que l'opérateur valide
+        # exactement ce qui sera lancé : l'OF demandé, sinon celui que la
+        # machine porte déjà, sinon la tête de file (EDD) de sa ligne.
+        of: OrdreFabrication | None
+        if ordre_fabrication_id is not None:
+            of = db.get(OrdreFabrication, ordre_fabrication_id)
+            if of is None:
+                return f"OF introuvable (id={ordre_fabrication_id}).", None
+        elif machine.ordre_fabrication_id is not None:
+            of = db.get(OrdreFabrication, machine.ordre_fabrication_id)
+        else:
+            of = line_queue_service.prochain_of(db, machine.ligne_production_id)
+        if of is None:
+            return (
+                f"Aucun OF en attente sur la ligne de {machine.code} : précisez l'OF à lancer.",
+                None,
+            )
+        machine_id, of_id = machine.id, of.id
+        libelle = f"démarrer la machine {machine.code} sur l'OF {of.numero}"
+    # Signature du garde-fou sur les ID CANONIQUES, pas sur la chaîne fournie :
+    # « M-01 » à la proposition puis « 1 » à la confirmation doivent matcher.
+    if not confirmation_gate.evaluer(
+        config, "demarrer_machine", {"machine_id": machine_id, "of_id": of_id}, confirmation
+    ):
+        return _demande_confirmation(libelle)
+    try:
+        message = machine_command_service.demarrer(machine_id, ordre_fabrication_id=of_id)
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    return f"✅ {message}", _action_executee(libelle)
 
 
 @tool(response_format="content_and_artifact")
@@ -497,7 +505,7 @@ def lancer_of_maintenant(
             occupations = line_queue_service.occupations_ligne(db, of.ligne_production_id)
             details = "; ".join(
                 f"{occ.machine.code} → OF {occ.ordre.numero} ({occ.ordre.article.code}, "
-                f"reste {line_queue_service._reste_a_produire(occ.ordre)})"
+                f"reste {line_queue_service.reste_a_produire(occ.ordre)})"
                 for occ in occupations
             ) or "aucun OF identifié"
             return (
@@ -514,7 +522,7 @@ def lancer_of_maintenant(
                             "machine": occ.machine.code,
                             "of": occ.ordre.numero,
                             "article": occ.ordre.article.code if occ.ordre.article else None,
-                            "reste": line_queue_service._reste_a_produire(occ.ordre),
+                            "reste": line_queue_service.reste_a_produire(occ.ordre),
                         }
                         for occ in occupations
                     ],
@@ -539,27 +547,21 @@ def lancer_of_maintenant(
         ):
             return _demande_confirmation(libelle)
 
-        try:
-            machine = line_queue_service.lancer_of_sur_ligne(
-                db, of, preempt_disposition=disposition
-            )
-        except AppError as exc:
-            return f"❌ {exc.message}", None
-        # Commit avant diffusion (voir demarrer_machine) : sinon la relecture REST
-        # déclenchée côté frontend par le message WS peut arriver avant la
-        # validation de la transaction et rater la mise à jour.
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        broadcast_service.diffuser(
-            {"type": "ordres_update", "raison": "demarrage", "numero": of.numero}
-        )
-        prefixe = (
-            f"✅ OF {of.numero} lancé immédiatement sur {machine.code} "
-            f"({of.ligne_production.code}). Statut : EN_COURS."
-        )
-        if disposition is not None:
-            prefixe += f" OF en cours préempté (sort : {disposition.value})."
-        return prefixe, _action_executee(libelle)
+        of_id = of.id
+    try:
+        lancement = production_control_service.lancer_of(of_id, preempt_disposition=disposition)
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    broadcast_service.diffuser(
+        {"type": "ordres_update", "raison": "demarrage", "numero": lancement.of_numero}
+    )
+    resume = (
+        f"✅ OF {lancement.of_numero} lancé sur {lancement.machine_code} "
+        f"({lancement.ligne_code}), démarrage confirmé par l'automate. Statut : EN_COURS."
+    )
+    if lancement.of_preempte is not None and lancement.disposition is not None:
+        resume += f" OF {lancement.of_preempte} préempté (sort : {lancement.disposition.value})."
+    return resume, _action_executee(libelle)
 
 
 @tool(response_format="content_and_artifact")
@@ -634,13 +636,12 @@ def arreter_machine(
             config, "arreter_machine", {"machine_id": machine.id}, confirmation
         ):
             return _demande_confirmation(libelle)
-        try:
-            simulator_service.arreter(db, machine)
-        except AppError as exc:
-            return f"❌ {exc.message}", None
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        return f"✅ Machine {machine.code} arrêtée.", _action_executee(libelle)
+        machine_id = machine.id
+    try:
+        message = machine_command_service.arreter(machine_id)
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    return f"✅ {message}", _action_executee(libelle)
 
 
 @tool(response_format="content_and_artifact")
@@ -671,41 +672,25 @@ def arreter_ligne(
         ):
             return _demande_confirmation(libelle)
 
-        machines = list(
-            db.execute(
-                select(Machine).where(
-                    Machine.ligne_production_id == ligne.id, Machine.actif.is_(True)
-                )
-            ).scalars()
+        ligne_id = ligne.id
+    try:
+        arret = production_control_service.arreter_ligne(ligne_id)
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    if not arret.arretees and not arret.echecs:
+        return f"Aucune machine en production sur {arret.ligne_code} : rien à arrêter.", None
+    morceaux: list[str] = []
+    if arret.arretees:
+        morceaux.append(f"✅ Ligne {arret.ligne_code} : {', '.join(arret.arretees)} arrêtée(s).")
+    if arret.deja_arretees:
+        morceaux.append(f"Déjà à l'arrêt : {', '.join(arret.deja_arretees)}.")
+    if arret.indisponibles:
+        morceaux.append(f"En panne ou maintenance (non concernées) : {', '.join(arret.indisponibles)}.")
+    if arret.echecs:
+        morceaux.append(
+            "❌ Non arrêtée(s) : " + "; ".join(f"{code} ({raison})" for code, raison in arret.echecs)
         )
-        if not machines:
-            return f"Aucune machine active sur la ligne {ligne.code}.", None
-
-        arretees: list[Machine] = []
-        deja_arretees: list[str] = []
-        for machine in machines:
-            if machine.statut == StatutMachine.ARRET:
-                deja_arretees.append(machine.code)
-                continue
-            try:
-                simulator_service.arreter(db, machine)
-            except AppError:
-                continue
-            arretees.append(machine)
-
-        db.commit()
-        for machine in arretees:
-            broadcast_service.diffuser_machine(db, machine)
-
-        if not arretees:
-            return (
-                f"Aucune machine à arrêter sur {ligne.code} (déjà toutes à l'arrêt).",
-                None,
-            )
-        resume = f"✅ Ligne {ligne.code} arrêtée : {', '.join(m.code for m in arretees)}."
-        if deja_arretees:
-            resume += f" Déjà à l'arrêt : {', '.join(deja_arretees)}."
-        return resume, _action_executee(libelle)
+    return " ".join(morceaux), _action_executee(libelle) if arret.arretees else None
 
 
 @tool(response_format="content_and_artifact")
@@ -729,16 +714,12 @@ def resoudre_arret_machine(
             config, "resoudre_arret_machine", {"machine_id": machine.id}, confirmation
         ):
             return _demande_confirmation(libelle)
-        try:
-            simulator_service.resoudre_arret(db, machine, comment=commentaire)
-        except AppError as exc:
-            return f"❌ {exc.message}", None
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        return (
-            f"✅ Arrêt résolu sur {machine.code} : la machine est de nouveau opérationnelle.",
-            _action_executee(libelle),
-        )
+        machine_id = machine.id
+    try:
+        message = machine_command_service.resoudre_arret(machine_id, commentaire=commentaire)
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    return f"✅ {message}", _action_executee(libelle)
 
 
 @tool(response_format="content_and_artifact")
@@ -766,18 +747,14 @@ def lancer_maintenance(
             confirmation,
         ):
             return _demande_confirmation(libelle)
-        try:
-            simulator_service.demarrer_maintenance(
-                db, machine, type_maintenance=type_maintenance, description=description
-            )
-        except AppError as exc:
-            return f"❌ {exc.message}", None
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        return (
-            f"✅ Maintenance {type_maintenance} démarrée sur {machine.code}.",
-            _action_executee(libelle),
+        machine_id = machine.id
+    try:
+        message = machine_command_service.demarrer_maintenance(
+            machine_id, type_maintenance=type_maintenance, description=description
         )
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    return f"✅ {message}", _action_executee(libelle)
 
 
 @tool(response_format="content_and_artifact")
@@ -796,61 +773,30 @@ def basculer_of_vers_ligne(
         if of is None:
             return f"OF introuvable : {of_numero_ou_id}", None
 
-        ligne = db.get(LigneProduction, ligne_id)
-        if ligne is None or not ligne.actif:
-            return f"❌ Ligne cible introuvable ou inactive : id={ligne_id}.", None
-
-        libelle = f"basculer l'OF {of.numero} vers la ligne {ligne.code}"
-        if not confirmation_gate.evaluer(
-            config,
-            "basculer_of_vers_ligne",
-            {"of_id": of.id, "ligne_id": ligne.id},
-            confirmation,
-        ):
-            return _demande_confirmation(libelle)
-        if not any(article.id == of.article_id for article in ligne.articles):
-            return (
-                f"❌ Bascule refusée : l'article {of.article.code} n'est pas homologué "
-                f"sur la ligne {ligne.code}.",
-                None,
-            )
-
-        cible = line_scoring_service.machine_libre_sur_ligne(db, ligne_id)
-        if cible is None:
-            return (
-                f"❌ Aucune machine libre sur la ligne id={ligne_id} : "
-                "impossible de basculer l'OF.",
-                None,
-            )
-
-        # Libère la machine qui portait l'OF (si elle existe encore).
-        source = db.execute(
-            select(Machine).where(Machine.ordre_fabrication_id == of.id)
-        ).scalars().first()
-        source_txt = ""
-        if source is not None:
-            source.ordre_fabrication_id = None
-            if source.statut == StatutMachine.MARCHE:
-                source.statut = StatutMachine.ARRET
-            source_txt = f" (machine {source.code} libérée)"
-
-        of.ligne_production_id = ligne_id
-        db.flush()
-
+        # Préconditions vérifiées AVANT de demander l'accord : on ne fait jamais
+        # confirmer une bascule qui serait refusée ensuite.
         try:
-            simulator_service.demarrer(db, cible, ordre_fabrication_id=of.id)
+            of, ligne, cible = production_control_service.verifier_bascule(db, of.id, ligne_id)
         except AppError as exc:
-            return f"❌ Bascule interrompue : {exc.message}", None
-        db.commit()
-
-        if source is not None:
-            broadcast_service.diffuser_machine(db, source)
-        broadcast_service.diffuser_machine(db, cible)
-        return (
-            f"✅ OF {of.numero} basculé vers la ligne id={ligne_id} : "
-            f"machine {cible.code} démarrée{source_txt}. La production reprend.",
-            _action_executee(libelle),
+            return f"❌ Bascule refusée : {exc.message}", None
+        of_id = of.id
+        libelle = (
+            f"basculer l'OF {of.numero} vers la ligne {ligne.code} (démarrage sur {cible.code})"
         )
+    if not confirmation_gate.evaluer(
+        config, "basculer_of_vers_ligne", {"of_id": of_id, "ligne_id": ligne_id}, confirmation
+    ):
+        return _demande_confirmation(libelle)
+    try:
+        bascule = production_control_service.basculer_of(of_id, ligne_id)
+    except AppError as exc:
+        return f"❌ Bascule interrompue : {exc.message}", None
+    source = f" (machine {bascule.machine_source} libérée)" if bascule.machine_source else ""
+    return (
+        f"✅ OF {bascule.of_numero} basculé vers {bascule.ligne_code} : machine "
+        f"{bascule.machine_cible} démarrée{source}. La production reprend.",
+        _action_executee(libelle),
+    )
 
 
 @tool(response_format="content_and_artifact")

@@ -59,7 +59,7 @@ class StatutMachine(str, Enum):
 
 
 class TypeEvenementMachine(str, Enum):
-    """Type d'événement émis par le simulateur machine."""
+    """Type d'événement machine (traduit de la télémétrie des automates)."""
 
     MACHINE_STARTED = "MACHINE_STARTED"
     MACHINE_STOPPED = "MACHINE_STOPPED"
@@ -91,6 +91,8 @@ class CauseArret(str, Enum):
     MAINTENANCE_PLANIFIEE = "MAINTENANCE_PLANIFIEE"
     MICRO_ARRET = "MICRO_ARRET"
     QUALITE_BLOQUANTE = "QUALITE_BLOQUANTE"
+    # Arrêt pour prélèvement d'échantillon (contrôle qualité) : planifié.
+    PRELEVEMENT_QUALITE = "PRELEVEMENT_QUALITE"
     AUTRE = "AUTRE"
 
 

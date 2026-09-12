@@ -74,6 +74,9 @@ def evaluer_apres_evenement(
     if type_evenement in (
         TypeEvenementMachine.DOWNTIME_RESOLVED,
         TypeEvenementMachine.MAINTENANCE_ENDED,
+        # Un redémarrage clôt l'arrêt (voir machine_state_service) : l'alerte
+        # « arrêt en cours » ne doit pas lui survivre.
+        TypeEvenementMachine.MACHINE_STARTED,
     ):
         _resoudre(db, machine.id, "arret")
 

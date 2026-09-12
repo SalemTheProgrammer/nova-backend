@@ -1,4 +1,4 @@
-"""MachineEvent: journal append-only de tous les événements du simulateur."""
+"""MachineEvent : journal append-only de tous les événements machine."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -14,7 +14,8 @@ from app.models.machine import Machine
 
 
 class MachineEvent(Base):
-    """Un événement brut émis par le simulateur (source de vérité pour l'état et le TRS)."""
+    """Un événement machine (source de vérité pour l'état et le TRS), traduit de
+    la télémétrie de l'automate — `payload.source` indique l'origine."""
 
     __tablename__ = "machine_event"
 

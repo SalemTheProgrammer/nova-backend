@@ -9,6 +9,9 @@ import pytest
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
 os.environ.setdefault("PINECONE_API_KEY", "test-key")
 os.environ.setdefault("API_KEYS", "test-api-key")
+# Aucun broker MQTT en test : l'hôte Sparkplug n'est pas démarré, les tests
+# de la chaîne commande → accusé injectent un faux automate.
+os.environ.setdefault("MQTT_ENABLED", "false")
 
 from fastapi.testclient import TestClient  # noqa: E402
 

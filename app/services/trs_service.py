@@ -164,17 +164,16 @@ def calculer_trs_machine(
     jusqua = jusqua or datetime.utcnow()
 
     if depuis is None:
-        if machine.ordre_fabrication and machine.ordre_fabrication.date_debut_reelle:
-            # Meilleur cas : on connaît le début réel de l'OF
-            depuis = machine.ordre_fabrication.date_debut_reelle
+        debut_activite = _trouver_debut_activite(db, machine.id)
+        if debut_activite:
+            # Session active de la machine bornée à la fenêtre d'équipe (8 h)
+            depuis = max(jusqua - FENETRE_DEFAUT, debut_activite)
+        elif machine.ordre_fabrication and machine.ordre_fabrication.date_debut_reelle:
+            # Pas d'événement MACHINE_STARTED mais OF avec début réel connu
+            depuis = max(jusqua - FENETRE_DEFAUT, machine.ordre_fabrication.date_debut_reelle)
         else:
-            # Pas d'OF actif → chercher le dernier démarrage machine
-            debut_activite = _trouver_debut_activite(db, machine.id)
-            if debut_activite:
-                depuis = debut_activite
-            else:
-                # Aucun événement de démarrage → machine jamais active
-                return _zero_result()
+            # Aucun événement de démarrage → machine jamais active
+            return _zero_result()
 
     downtimes = list(
         db.execute(

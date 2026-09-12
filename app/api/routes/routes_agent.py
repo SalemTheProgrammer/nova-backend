@@ -14,9 +14,9 @@ from app.models.enums import StatutProposition
 from app.schemas.agent_schema import AgentProposalRead, AutonomieRead, AutonomieUpdate
 from app.services import supervisor_service
 
-# Panneau propositions/autonomie visible à tout utilisateur connecté (voir
-# RightAIAgent.tsx) — pas réservé à l'admin, juste authentifié par utilisateur
-# plutôt que par la seule clé API partagée.
+# Décisions du superviseur, tranchées depuis les cartes du chat Nova (voir
+# DecisionMessage.tsx) par tout utilisateur connecté — pas réservé à l'admin,
+# juste authentifié par utilisateur plutôt que par la seule clé API partagée.
 router = APIRouter(
     prefix="/agent",
     tags=["agent-superviseur"],

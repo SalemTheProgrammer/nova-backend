@@ -38,6 +38,11 @@ class DowntimeActifRead(BaseModel):
     start_time: datetime
 
 
+class OperateurRead(BaseModel):
+    matricule: str
+    nom: str | None = None
+
+
 class MachineRead(_ORM, MachineBase):
     id: int
     statut: StatutMachine
@@ -49,6 +54,10 @@ class MachineRead(_ORM, MachineBase):
     quantite_rejetee: int
     dernier_evenement_at: datetime | None
     downtime_actif: DowntimeActifRead | None = None
+    # Automate Sparkplug rattaché en ligne ? None = aucun automate rattaché.
+    automate_connecte: bool | None = None
+    # Employé au poste (badge RFID lu par l'automate). None = personne.
+    operateur: OperateurRead | None = None
     trs: Decimal | None = None
     tq: Decimal | None = None
     tp: Decimal | None = None

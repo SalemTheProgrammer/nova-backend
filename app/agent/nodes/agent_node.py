@@ -30,6 +30,10 @@ REFUS_OUTIL = "Désolé, vous n'avez pas l'autorisation d'utiliser cet outil."
 # tool-result sans son tool-call).
 FENETRE_MESSAGES = 40
 
+# Préfixe d'id du message d'accueil de Nova, écrit en tête du thread à
+# l'ouverture du panneau (voir `runner.enregistrer_accueil`).
+PREFIXE_ACCUEIL = "nova-accueil-"
+
 def _outils_autorises(config: RunnableConfig | None) -> list[str] | None:
     """Liste des noms d'outils autorisés depuis la config d'exécution.
 
@@ -105,6 +109,19 @@ def call_model(state: AgentState, config: RunnableConfig | None = None) -> dict:
     )
     # Filet : si le trim renvoie vide (ex. tour courant plus long que la
     # fenêtre), on garde l'état intact plutôt que d'appeler le modèle sans rien.
-    messages = [SystemMessage(content=prompt), *(historique or state["messages"])]
+    fenetre = historique or state["messages"]
+    # Le message d'accueil ouvre le thread AVANT tout message opérateur : le trim
+    # (`start_on="human"`) l'écarte donc toujours. On le remet en tête tant que la
+    # conversation est courte, pour que Nova sache ce qu'elle a dit si
+    # l'opérateur y répond (« ok, règle M-03 »).
+    premier = state["messages"][0] if state["messages"] else None
+    if (
+        premier is not None
+        and (premier.id or "").startswith(PREFIXE_ACCUEIL)
+        and len(state["messages"]) <= FENETRE_MESSAGES
+        and all(m.id != premier.id for m in fenetre)
+    ):
+        fenetre = [premier, *fenetre]
+    messages = [SystemMessage(content=prompt), *fenetre]
     response = model.invoke(messages)
     return {"messages": [response]}

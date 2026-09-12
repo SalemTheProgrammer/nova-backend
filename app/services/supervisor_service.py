@@ -4,7 +4,9 @@ Boucle d'arrière-plan (voir `boucle_superviseur`) qui scanne l'atelier toutes l
 quelques secondes. Quand un problème est détecté, une `AgentProposal` est créée
 avec un diagnostic chiffré et une action structurée, puis poussée sur le
 WebSocket. L'action n'est exécutée qu'après approbation de l'opérateur
-(`executer_proposition`) — human-in-the-loop obligatoire.
+(`executer_action`) — human-in-the-loop obligatoire, sauf délégation explicite
+via le mode d'autonomie. Les actions machine passent par des commandes
+Sparkplug confirmées par les automates (`machine_command_service`).
 
 Règles de détection (déterministes, donc fiables en démo) :
   1. Arrêt machine > SEUIL avec OF actif  → basculer l'OF vers la meilleure ligne
@@ -22,7 +24,7 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError, FabricationError, NotFoundError
@@ -51,9 +53,10 @@ from app.services import (
     broadcast_service,
     cost_service,
     line_scoring_service,
+    machine_command_service,
     notify_service,
+    production_control_service,
     risk_service,
-    simulator_service,
 )
 from app.services import manufacturing as manufacturing_svc
 
@@ -191,28 +194,35 @@ def _proposer(
     return proposition
 
 
-def _appliquer_autonomie(db: Session, proposition: AgentProposal) -> None:
-    """Décide si `proposition`, qui vient d'être créée, s'exécute seule ou
-    attend l'opérateur — selon le mode d'autonomie courant et son risque."""
-    mode = mode_autonomie()
-    if mode == "manuel":
-        return
-    risque = RISQUE_PAR_TYPE.get(proposition.type, RISQUE_MOYEN)
-    if risque == RISQUE_FAIBLE:
-        decider(
-            db, proposition.id, approuver=True, canal="systeme",
-            identite="autopilote", decideur="autopilote",
-        )
-        return
-    if mode == "autopilote":
-        from app.core.config import get_settings
+def _execution_immediate(proposition: AgentProposal) -> bool:
+    """Risque FAIBLE en mode assisté/autopilote : exécutée dès sa création."""
+    return (
+        mode_autonomie() != "manuel"
+        and proposition.statut == StatutProposition.PROPOSEE
+        and RISQUE_PAR_TYPE.get(proposition.type, RISQUE_MOYEN) == RISQUE_FAIBLE
+    )
 
-        delai = get_settings().autopilote_delai_moyen_s
-        proposition.execution_auto_at = datetime.utcnow() + timedelta(seconds=delai)
-        db.flush()
-        broadcast_service.diffuser(
-            {"type": "agent_proposal_update", "proposal": serialiser_proposition(proposition)}
-        )
+
+def _appliquer_autonomie(db: Session, proposition: AgentProposal) -> None:
+    """Programme le compte à rebours d'une proposition MOYEN en autopilote.
+
+    Les propositions à risque FAIBLE ne sont PAS exécutées ici mais par
+    `_tick_superviseur`, après le commit de l'analyse : une commande machine
+    attend l'accusé de l'automate, et l'ingestion doit pouvoir écrire pendant
+    ce temps (SQLite n'a qu'un écrivain).
+    """
+    if mode_autonomie() != "autopilote":
+        return
+    if RISQUE_PAR_TYPE.get(proposition.type, RISQUE_MOYEN) != RISQUE_MOYEN:
+        return
+    from app.core.config import get_settings
+
+    delai = get_settings().autopilote_delai_moyen_s
+    proposition.execution_auto_at = datetime.utcnow() + timedelta(seconds=delai)
+    db.flush()
+    broadcast_service.diffuser(
+        {"type": "agent_proposal_update", "proposal": serialiser_proposition(proposition)}
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -598,85 +608,56 @@ def analyser(db: Session) -> list[AgentProposal]:
 # --------------------------------------------------------------------------- #
 
 
-def executer_proposition(db: Session, proposition: AgentProposal) -> str:
-    """Exécute l'action structurée d'une proposition approuvée. Renvoie le résumé."""
-    action = proposition.action or {}
+def executer_action(action: dict) -> str:
+    """Exécute l'action structurée d'une proposition approuvée. Renvoie le résumé.
+
+    Ouvre ses propres sessions : les actions machine attendent l'accusé des
+    automates et ne doivent tenir aucune transaction d'écriture pendant ce temps.
+    """
     type_ = action.get("type")
 
     if type_ == "basculer_of":
-        of = db.get(OrdreFabrication, action["of_id"])
-        if of is None:
-            raise AppError("OF introuvable pour la bascule.")
-        cible = line_scoring_service.machine_libre_sur_ligne(db, action["ligne_id"])
-        if cible is None:
-            raise AppError("Plus aucune machine libre sur la ligne cible.")
-        source = db.get(Machine, action.get("machine_source_id"))
-        if source is not None and source.ordre_fabrication_id == of.id:
-            source.ordre_fabrication_id = None
-        of.ligne_production_id = action["ligne_id"]
-        db.flush()
-        simulator_service.demarrer(db, cible, ordre_fabrication_id=of.id)
-        # Commit avant diffusion : voir la même remarque dans agent/tools/actions.py —
-        # sinon la relecture REST déclenchée côté frontend par le message WS peut
-        # arriver avant la validation de la transaction et rater la mise à jour.
-        db.commit()
-        if source is not None:
-            broadcast_service.diffuser_machine(db, source)
-        broadcast_service.diffuser_machine(db, cible)
-        return f"OF {of.numero} basculé : machine {cible.code} démarrée."
+        bascule = production_control_service.basculer_of(action["of_id"], action["ligne_id"])
+        source = f" ({bascule.machine_source} libérée)" if bascule.machine_source else ""
+        return (
+            f"OF {bascule.of_numero} basculé vers {bascule.ligne_code} : "
+            f"machine {bascule.machine_cible} démarrée{source}."
+        )
 
     if type_ == "maintenance_urgence":
-        machine = db.get(Machine, action["machine_id"])
-        if machine is None:
-            raise AppError("Machine introuvable.")
-        simulator_service.demarrer_maintenance(
-            db,
-            machine,
+        return machine_command_service.demarrer_maintenance(
+            action["machine_id"],
             type_maintenance=TypeMaintenance.URGENCE.value,
             description="Maintenance d'urgence déclenchée par le superviseur Nova",
         )
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        return f"Maintenance d'urgence lancée sur {machine.code}."
 
     if type_ == "pause_reglage":
-        machine = db.get(Machine, action["machine_id"])
-        if machine is None:
-            raise AppError("Machine introuvable.")
-        simulator_service.mettre_en_pause(db, machine)
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        return f"{machine.code} mise en pause pour réglage qualité."
+        resume = machine_command_service.mettre_en_pause(action["machine_id"])
+        return f"{resume} Réglage qualité à effectuer avant la reprise."
 
     if type_ == "maintenance_preventive":
-        machine = db.get(Machine, action["machine_id"])
-        if machine is None:
-            raise AppError("Machine introuvable.")
-        simulator_service.demarrer_maintenance(
-            db,
-            machine,
+        return machine_command_service.demarrer_maintenance(
+            action["machine_id"],
             type_maintenance=TypeMaintenance.PREVENTIVE.value,
             description="Maintenance préventive déclenchée par le superviseur Nova (risque de panne élevé)",
         )
-        db.commit()
-        broadcast_service.diffuser_machine(db, machine)
-        return f"Maintenance préventive lancée sur {machine.code}."
 
     if type_ == "alerte_reappro":
-        mp = db.get(MatierePremiere, action["matiere_premiere_id"])
-        if mp is None:
-            raise AppError("Matière première introuvable.")
-        dispo = manufacturing_svc.stock_disponible_mp(db, mp.id)
-        alerte = Alert(
-            severity=SeveriteAlerte.WARNING,
-            type="REAPPROVISIONNEMENT",
-            message=(
-                f"Réapprovisionner {mp.code} ({mp.designation}) : stock {dispo} "
-                f"{mp.unite.value}, seuil {mp.seuil_alerte} {mp.unite.value}."
-            ),
-        )
-        db.add(alerte)
-        db.flush()
+        with session_scope() as db:
+            mp = db.get(MatierePremiere, action["matiere_premiere_id"])
+            if mp is None:
+                raise AppError("Matière première introuvable.")
+            dispo = manufacturing_svc.stock_disponible_mp(db, mp.id)
+            db.add(
+                Alert(
+                    severity=SeveriteAlerte.WARNING,
+                    type="REAPPROVISIONNEMENT",
+                    message=(
+                        f"Réapprovisionner {mp.code} ({mp.designation}) : stock {dispo} "
+                        f"{mp.unite.value}, seuil {mp.seuil_alerte} {mp.unite.value}."
+                    ),
+                )
+            )
         resultat = f"Alerte de réapprovisionnement créée pour {mp.code}."
 
         contact = action.get("fournisseur_contact")
@@ -696,20 +677,22 @@ def executer_proposition(db: Session, proposition: AgentProposal) -> str:
         return resultat
 
     if type_ == "alerte_retard":
-        of = db.get(OrdreFabrication, action["of_id"])
-        if of is None:
-            raise AppError("OF introuvable.")
-        alerte = Alert(
-            severity=SeveriteAlerte.WARNING,
-            type="RETARD_OF",
-            message=(
-                f"OF {of.numero} en retard prévisionnel par rapport à l'échéance du "
-                f"{of.date_echeance.isoformat() if of.date_echeance else '—'}."
-            ),
-        )
-        db.add(alerte)
-        db.flush()
-        return f"Alerte de retard créée pour l'OF {of.numero}."
+        with session_scope() as db:
+            of = db.get(OrdreFabrication, action["of_id"])
+            if of is None:
+                raise AppError("OF introuvable.")
+            db.add(
+                Alert(
+                    severity=SeveriteAlerte.WARNING,
+                    type="RETARD_OF",
+                    message=(
+                        f"OF {of.numero} en retard prévisionnel par rapport à l'échéance du "
+                        f"{of.date_echeance.isoformat() if of.date_echeance else '—'}."
+                    ),
+                )
+            )
+            numero = of.numero
+        return f"Alerte de retard créée pour l'OF {numero}."
 
     raise AppError(f"Action inconnue : {type_!r}")
 
@@ -747,9 +730,25 @@ def decider(
             "Rejetée par l'opérateur." if decideur == "operateur" else "Rejetée automatiquement."
         )
     else:
-        proposition.statut = StatutProposition.APPROUVEE
+        # Réservation atomique AVANT d'agir : une proposition approuvée depuis le
+        # web et depuis WhatsApp au même instant n'est exécutée qu'une fois. Le
+        # commit libère aussi la transaction pendant que les commandes machine
+        # attendent l'accusé des automates.
+        reservation = db.execute(
+            update(AgentProposal)
+            .where(
+                AgentProposal.id == proposition.id,
+                AgentProposal.statut == StatutProposition.PROPOSEE,
+            )
+            .values(statut=StatutProposition.APPROUVEE)
+        )
+        if reservation.rowcount != 1:
+            db.rollback()
+            raise FabricationError("Cette proposition a déjà été traitée.")
+        db.commit()
+        db.refresh(proposition)
         try:
-            resume = executer_proposition(db, proposition)
+            resume = executer_action(proposition.action or {})
         except AppError as exc:
             proposition.statut = StatutProposition.ECHOUEE
             proposition.resultat = f"Échec : {exc.message}"
@@ -781,47 +780,57 @@ def decider(
 # --------------------------------------------------------------------------- #
 
 
-def _executer_autopilote_echus(db: Session) -> list[AgentProposal]:
+def _decider_autopilote(proposition_id: int) -> bool:
+    """Approbation automatique dans une session dédiée. True si décidée."""
+    try:
+        with session_scope() as db:
+            decider(
+                db, proposition_id, approuver=True, canal="systeme",
+                identite="autopilote", decideur="autopilote",
+            )
+    except AppError:
+        logger.exception("autopilote_execution_echouee", proposition_id=proposition_id)
+        return False
+    return True
+
+
+def _executer_autopilote_echus() -> list[int]:
     """Exécute les propositions dont le compte à rebours autopilote (risque
     MOYEN) est écoulé et qui sont ENCORE en attente — l'opérateur n'a rejeté ni
     approuvé entre-temps, sinon leur statut ne serait plus PROPOSEE."""
-    maintenant = datetime.utcnow()
-    echues = db.execute(
-        select(AgentProposal).where(
-            AgentProposal.statut == StatutProposition.PROPOSEE,
-            AgentProposal.execution_auto_at.is_not(None),
-            AgentProposal.execution_auto_at <= maintenant,
-        )
-    ).scalars().all()
-    executees: list[AgentProposal] = []
-    for p in echues:
-        try:
-            executees.append(
-                decider(
-                    db, p.id, approuver=True, canal="systeme",
-                    identite="autopilote", decideur="autopilote",
-                )
+    with session_scope() as db:
+        echues = db.execute(
+            select(AgentProposal.id).where(
+                AgentProposal.statut == StatutProposition.PROPOSEE,
+                AgentProposal.execution_auto_at.is_not(None),
+                AgentProposal.execution_auto_at <= datetime.utcnow(),
             )
-        except AppError:
-            logger.exception("autopilote_execution_echouee", proposition_id=p.id)
-    return executees
+        ).scalars().all()
+    return [pid for pid in echues if _decider_autopilote(pid)]
 
 
 def _tick_superviseur() -> tuple[list[dict], list[dict]]:
-    """Un passage de détection (exécuté dans un thread — session propre).
+    """Un passage de détection (exécuté dans un thread — sessions propres).
 
-    Renvoie (nouvelles, échues) : `nouvelles` sont les propositions créées ce
-    tick (certaines déjà EXECUTEE si le risque FAIBLE les a fait auto-exécuter
-    à la création — voir `_appliquer_autonomie`) ; `echues` sont des
-    propositions MOYEN créées lors d'un tick précédent dont le compte à rebours
-    autopilote vient de s'écouler.
+    1. Analyse et création des propositions, committée.
+    2. Exécution immédiate des propositions à risque FAIBLE (modes assisté /
+       autopilote), hors de la transaction d'analyse.
+    3. Exécution des propositions MOYEN dont le compte à rebours autopilote
+       vient de s'écouler (créées lors d'un tick précédent).
+
+    Renvoie (nouvelles, échues), sérialisées dans leur état final.
     """
     with session_scope() as db:
         nouvelles = analyser(db)
-        echues = _executer_autopilote_echus(db)
+        ids_nouvelles = [p.id for p in nouvelles]
+        a_executer = [p.id for p in nouvelles if _execution_immediate(p)]
+    for proposition_id in a_executer:
+        _decider_autopilote(proposition_id)
+    ids_echues = _executer_autopilote_echus()
+    with session_scope() as db:
         return (
-            [serialiser_proposition(p) for p in nouvelles],
-            [serialiser_proposition(p) for p in echues],
+            [serialiser_proposition(db.get(AgentProposal, pid)) for pid in ids_nouvelles],
+            [serialiser_proposition(db.get(AgentProposal, pid)) for pid in ids_echues],
         )
 
 

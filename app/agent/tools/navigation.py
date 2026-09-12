@@ -11,9 +11,6 @@ from langchain_core.tools import tool
 
 PAGES: dict[str, str] = {
     "dashboard": "Dashboard",
-    "jumeau": "Jumeau numérique",
-    "simulateur": "Simulateur",
-    "machines": "Machines",
     "trs": "TRS",
     "arrets": "Arrêts",
     "qualite": "Qualité",
@@ -32,8 +29,8 @@ PAGES: dict[str, str] = {
 def aller_a_la_page(page: str, raison: str | None = None) -> tuple[str, dict | None]:
     """Redirige l'interface vers la page correspondant à la question de l'opérateur.
 
-    `page` doit être exactement l'une de : dashboard, jumeau, simulateur,
-    machines, trs, arrets, qualite, maintenance, stock, ordres, articles,
+    `page` doit être exactement l'une de : dashboard,
+    trs, arrets, qualite, maintenance, stock, ordres, articles,
     matieres, lignes, fournisseurs, documents.
 
     À appeler dès que la réponse concerne un domaine ayant une page dédiée, pour
@@ -69,13 +66,13 @@ TOOL_PAGE_MAP: dict[str, str] = {
     "lister_ordres_par_quantite": "ordres",
     "lister_lignes_production": "lignes",
     "choisir_meilleure_ligne": "lignes",
-    "analyser_bascule_of": "jumeau",
+    "analyser_bascule_of": "ordres",
     "basculer_of_vers_ligne": "ordres",
     "mettre_of_en_file": "ordres",
-    "etat_machine": "machines",
-    "etat_ligne": "machines",
-    "demarrer_machine": "machines",
-    "arreter_machine": "machines",
+    "etat_machine": "dashboard",
+    "etat_ligne": "dashboard",
+    "demarrer_machine": "dashboard",
+    "arreter_machine": "dashboard",
     "resume_trs": "trs",
     "arrets_actifs": "arrets",
     "resoudre_arret_machine": "arrets",
@@ -85,6 +82,4 @@ TOOL_PAGE_MAP: dict[str, str] = {
     "risque_panne_machines": "maintenance",
     "lancer_maintenance": "maintenance",
     "rechercher_documents": "documents",
-    # Piloter le jumeau ouvre automatiquement la page du jumeau numérique.
-    "piloter_jumeau_numerique": "jumeau",
 }

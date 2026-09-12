@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -29,7 +29,7 @@ from app.schemas.kpi_schema import (
     TRSRead,
 )
 from app.schemas.kpi_schema import AlertRead
-from app.services import ai_agent_service, dashboard_service, trs_service
+from app.services import ai_agent_service, dashboard_service, pdf_service, trs_service
 
 router = APIRouter(
     tags=["kpi"],
@@ -267,3 +267,24 @@ def ai_insights(db: Session = Depends(get_db)) -> InsightsRead:
     insights = ai_agent_service.generer_insights(db)
     _insights_cache = (now, insights)
     return InsightsRead(insights=insights)
+
+
+@router.get("/dashboard/bilan-pdf")
+@router.get("/kpi/bilan-pdf")
+def telecharger_bilan_of_pdf(
+    ligne_id: int | None = Query(default=None),
+    of_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Génère et télécharge le Bilan Ordre de Fabrication (OF) officiel en PDF
+    reproduisant rigoureusement la mise en page industrielle MES."""
+    pdf_bytes, filename = pdf_service.generer_bilan_of_exact_pdf(db, of_id=of_id, ligne_id=ligne_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+

@@ -1,86 +1,67 @@
-# Nova Agent Backend
+# Nova — backend
 
-Production-ready agentic backend built with **FastAPI + LangGraph + LangChain + Pydantic + Pinecone**.
+FastAPI application. It contains:
+- the MES domain: work orders, FEFO stock, TRS/OEE, downtime, quality, scheduling;
+- the LangGraph agent and its 46 tools;
+- the autonomous supervisor;
+- the **Sparkplug B primary host**, which ingests PLC telemetry over MQTT and
+  sends machine commands.
 
-An LLM agent reasons in a loop, calling a Pinecone-backed retrieval tool (RAG) when it needs
-domain knowledge, with per-conversation memory, API-key auth, structured logging, and Docker.
+See the [root README](../README.md) for the full picture, configuration and API
+reference, and [../simulator/README.md](../simulator/README.md) for the
+simulated plant and the metric contract.
 
-## Architecture
-
-```
-app/
-├── main.py                 # FastAPI app factory, middleware, lifespan
-├── api/
-│   ├── router.py           # Aggregate router
-│   └── routes/
-│       ├── health.py       # /health, /ready
-│       └── chat.py         # /chat (agent), /ingest (RAG documents)
-├── agent/
-│   ├── graph.py            # LangGraph: agent <-> tools loop
-│   ├── runner.py           # async entrypoint used by the API
-│   ├── state.py            # graph state (TypedDict + add_messages reducer)
-│   ├── nodes/agent_node.py # LLM call with bound tools
-│   ├── prompts.py          # system prompt
-│   └── tools/retrieval.py  # Pinecone knowledge-base search tool
-├── services/
-│   ├── llm.py              # ChatOpenAI + embeddings factories
-│   └── vector_store.py     # Pinecone index mgmt + search/upsert (retried)
-├── schemas/chat.py         # Pydantic request/response models
-└── core/
-    ├── config.py           # pydantic-settings config
-    ├── logging.py          # structlog setup
-    ├── security.py         # X-API-Key auth dependency
-    └── exceptions.py       # domain errors + handlers
-```
-
-## Quick start
+## Run
 
 ```bash
-cd backend
-python -m venv .venv && . .venv/Scripts/activate   # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-cp .env.example .env        # fill in OPENAI_API_KEY and PINECONE_API_KEY
-uvicorn app.main:app --reload
+cp .env.example .env              # set OPENAI_API_KEY, ADMIN_PHONE, AUTH_SECRET
+python -m app.db.seed             # minimal master data
+python -m scripts.migrate_mqtt    # once, for databases created before the MQTT rework
+uvicorn app.main:app --reload --port 8000
 ```
 
-Open the interactive docs at http://localhost:8000/docs
+The backend needs an MQTT broker (`MQTT_HOST`, default `localhost:1883`). It
+starts without one and keeps reconnecting; in the meantime machine commands
+fail with "broker MQTT non connecté".
 
-## Usage
+## How machine data flows
 
-Ingest documents into the knowledge base:
+```
+PLC / nova-sim ──DBIRTH/DDATA──▶ broker ──▶ SparkplugHost (paho thread)
+                                              │ queue
+                                              ▼
+                                   SparkplugIngestor (1 thread)
+                                   seq/bdSeq tracking, aliases, registry
+                                              │
+                                   mapper: tags → MES events
+                                              │
+                                   event_service → state, TRS log, alerts
+                                              │ after commit
+                                   command ack released + WebSocket broadcast
 
-```bash
-curl -X POST http://localhost:8000/api/v1/ingest \
-  -H "X-API-Key: dev-local-key" -H "Content-Type: application/json" \
-  -d '{"documents":[{"content":"API keys are issued via the admin panel.","source":"onboarding"}]}'
+Nova tool / supervisor / REST ──▶ machine_command_service ──DCMD──▶ broker ──▶ PLC
+                                   (waits for Command/LastId ack, 5 s timeout)
 ```
 
-Chat with the agent (reuse `thread_id` for multi-turn memory):
+Rules that keep this correct:
 
-```bash
-curl -X POST http://localhost:8000/api/v1/chat \
-  -H "X-API-Key: dev-local-key" -H "Content-Type: application/json" \
-  -d '{"message":"How are API keys issued?","thread_id":"demo-1"}'
-```
+- **Telemetry is the only writer of machine state.** A command never changes
+  state by itself: the machine's confirmed report does.
+- **Never wait on a command inside an open write transaction.** SQLite has a
+  single writer, and ingestion must be able to commit the confirmed state.
+  Multi-step flows (launch with pre-emption, re-route, stop a line) live in
+  `production_control_service` and commit between steps.
+- **Counters are PLC totals.** The MES counts the delta against the last value,
+  which is persisted in `sparkplug_device.last_values`, so production made
+  while the MES was down is still counted.
 
-## Configuration
-
-All settings come from environment variables / `.env` — see `.env.example`.
-Auth is disabled automatically when `API_KEYS` is empty (local dev convenience).
-
-## Testing
+## Tests
 
 ```bash
 pip install -e ".[dev]"
-pytest          # external services are mocked; no real API keys needed
-ruff check .
-mypy app
+pytest
 ```
 
-## Production notes
-
-- Swap `MemorySaver` in `agent/graph.py` for a persistent checkpointer (e.g. Postgres)
-  so conversation memory survives restarts and scales across replicas.
-- Run behind a reverse proxy; set `ENVIRONMENT=production` to disable `/docs` and emit JSON logs.
-- Set real `API_KEYS` and tighten `CORS_ORIGINS` before deploying.
-```
+No broker or OpenAI key is needed. The command-loop tests inject a fake PLC
+that answers DCMDs the way `nova-sim` does.

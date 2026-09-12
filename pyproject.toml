@@ -1,8 +1,9 @@
 [project]
 name = "nova-agent-backend"
 version = "0.1.0"
-description = "Production-ready agentic backend (LangGraph + LangChain + Pydantic + Pinecone)"
+description = "Nova — MES agentique (FastAPI + LangGraph) avec hôte Sparkplug B / MQTT"
 requires-python = ">=3.11"
+# Garder synchronisé avec requirements.txt (utilisé par le Dockerfile).
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
@@ -20,6 +21,13 @@ dependencies = [
     "structlog>=24.4.0",
     "httpx>=0.27.0",
     "orjson>=3.10.0",
+    "sqlalchemy>=2.0.0",
+    "pypdf>=5.0.0",
+    "python-multipart>=0.0.9",
+    "reportlab>=4.0.0",
+    "matplotlib>=3.9.0",
+    "paho-mqtt>=2.1,<3",
+    "protobuf>=7.35,<8",
 ]
 
 [project.optional-dependencies]
@@ -33,6 +41,7 @@ dev = [
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+extend-exclude = ["app/protocols/sparkplug_b/sparkplug_b_pb2.py", "app/protocols/sparkplug_b/sparkplug_b_pb2.pyi"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "ASYNC"]
@@ -45,3 +54,4 @@ testpaths = ["tests"]
 python_version = "3.11"
 strict = true
 ignore_missing_imports = true
+exclude = ["sparkplug_b_pb2"]

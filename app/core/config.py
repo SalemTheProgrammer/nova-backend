@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     # NoDecode: keep the raw env string so `_split_csv` parses the CSV
     # (otherwise pydantic-settings tries to JSON-decode the list first).
     cors_origins: Annotated[list[str], NoDecode] = Field(
-        default_factory=lambda: ["http://localhost:3000"]
+        default_factory=lambda: ["http://localhost:5173"]
     )
     api_keys: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
@@ -61,9 +61,26 @@ class Settings(BaseSettings):
     # Vision (analyse des photos envoyées à Nova sur WhatsApp)
     vision_model: str = "gpt-4o-mini"
 
-    # Superviseur autonome / simulation
+    # MQTT / Sparkplug B : télémétrie des automates et commandes machine.
+    # Nova est l'hôte Sparkplug (« Primary Host ») du groupe `sparkplug_group_id`.
+    mqtt_enabled: bool = True
+    mqtt_host: str = "localhost"
+    mqtt_port: int = 1883
+    mqtt_username: str = ""
+    mqtt_password: str = ""
+    mqtt_tls: bool = False
+    mqtt_tls_ca_file: str = ""  # vide = autorités de certification du système
+    mqtt_client_id: str = "nova-mes"
+    mqtt_keepalive_s: int = 30
+    sparkplug_group_id: str = "NovaPlant"
+    sparkplug_host_id: str = "nova-mes"
+    # Délai minimal entre deux demandes de re-naissance au même edge node.
+    sparkplug_rebirth_min_interval_s: float = 10.0
+    # Attente maximale de l'accusé d'un automate après une commande (DCMD).
+    machine_command_timeout_s: float = 5.0
+
+    # Superviseur autonome
     supervisor_enabled: bool = True
-    auto_sim_autostart: bool = False
     # Autonomie du superviseur : "manuel" (comportement historique, tout attend
     # l'opérateur), "assiste" (risque FAIBLE exécuté seul, immédiatement),
     # "autopilote" (idem + risque MOYEN exécuté seul après un délai, sauf rejet
@@ -132,6 +149,13 @@ class Settings(BaseSettings):
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
+        return value
+
+    @field_validator("sparkplug_group_id", "sparkplug_host_id", "mqtt_client_id")
+    @classmethod
+    def _identifiant_mqtt(cls, value: str) -> str:
+        if not value or any(c in "/+#" for c in value):
+            raise ValueError("identifiant MQTT/Sparkplug vide ou contenant / + #")
         return value
 
     @property

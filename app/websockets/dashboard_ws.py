@@ -1,7 +1,8 @@
 """`/ws/dashboard` : canal de diffusion (broadcast-only) pour le tableau de bord temps réel.
 
 Les clients (dashboard, page Machines, panneau IA) se connectent et reçoivent les messages
-poussés par `simulator_service`/`event_service` via `websocket_manager.manager`. Le serveur
+poussés par l'ingestion Sparkplug et les services (`broadcast_service`) via
+`websocket_manager.manager`. Le serveur
 ne traite pas de commandes entrantes sur ce canal — seule la boucle de réception sert à
 détecter la déconnexion.
 """

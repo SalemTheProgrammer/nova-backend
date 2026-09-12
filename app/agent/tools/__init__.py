@@ -12,7 +12,7 @@ from app.agent.tools.navigation import NAVIGATION_TOOLS
 from app.agent.tools.notify import NOTIFY_TOOLS
 from app.agent.tools.planning import PLANNING_TOOLS
 from app.agent.tools.scheduling import SCHEDULING_TOOLS
-from app.agent.tools.twin import TWIN_TOOLS
+from app.agent.tools.supervision import SUPERVISION_TOOLS
 
 DOCUMENT_TOOLS: list[BaseTool] = [rechercher_documents, lister_documents_disponibles]
 
@@ -21,11 +21,11 @@ ALL_TOOLS: list[BaseTool] = [
     *MANUFACTURING_TOOLS,
     *MES_TOOLS,
     *ACTION_TOOLS,
+    *SUPERVISION_TOOLS,
     *CHART_TOOLS,
     *NOTIFY_TOOLS,
     *SCHEDULING_TOOLS,
     *PLANNING_TOOLS,
-    *TWIN_TOOLS,
     *NAVIGATION_TOOLS,
 ]
 
@@ -36,11 +36,11 @@ _GROUPES: list[tuple[str, list[BaseTool]]] = [
     ("Fabrication", MANUFACTURING_TOOLS),
     ("Supervision / MES", MES_TOOLS),
     ("Actions machine", ACTION_TOOLS),
+    ("Décisions du superviseur", SUPERVISION_TOOLS),
     ("Graphiques", CHART_TOOLS),
     ("Notifications", NOTIFY_TOOLS),
     ("Planification d'envois", SCHEDULING_TOOLS),
     ("Ordonnancement", PLANNING_TOOLS),
-    ("Jumeau numérique", TWIN_TOOLS),
     ("Navigation", NAVIGATION_TOOLS),
 ]
 
@@ -68,10 +68,10 @@ __all__ = [
     "MANUFACTURING_TOOLS",
     "MES_TOOLS",
     "ACTION_TOOLS",
+    "SUPERVISION_TOOLS",
     "CHART_TOOLS",
     "NOTIFY_TOOLS",
     "SCHEDULING_TOOLS",
     "PLANNING_TOOLS",
-    "TWIN_TOOLS",
     "NAVIGATION_TOOLS",
 ]

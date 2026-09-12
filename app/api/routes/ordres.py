@@ -1,7 +1,7 @@
 """Ordres de fabrication : faisabilité, création (avec consommation FEFO), suivi."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -24,7 +24,13 @@ from app.schemas.manufacturing import (
     OFRead,
     OFStatutUpdate,
 )
-from app.services import broadcast_service, line_queue_service, line_scoring_service
+from app.services import (
+    broadcast_service,
+    line_queue_service,
+    line_scoring_service,
+    pdf_service,
+    production_control_service,
+)
 from app.services import manufacturing as svc
 from app.services.line_queue_service import DispositionPreemption
 
@@ -150,7 +156,18 @@ def changer_statut(
 ) -> OFRead:
     of = _get_or_404(db, of_id)
     of.statut = payload.statut
+    if payload.statut != "EN_COURS":
+        machines = (
+            db.execute(select(Machine).where(Machine.ordre_fabrication_id == of.id))
+            .scalars()
+            .all()
+        )
+        for m in machines:
+            m.ordre_fabrication_id = None
     db.flush()
+    broadcast_service.diffuser(
+        {"type": "ordres_update", "raison": "statut", "numero": of.numero}
+    )
     return _of_read(of)
 
 
@@ -244,17 +261,15 @@ def lancer(
                 f"Disposition inconnue : {payload.preempt_disposition}. "
                 "Choix : requeue, pause, cancel.",
             )
+    # Les commandes machine attendent l'accusé de l'automate : cette session ne
+    # doit tenir aucune écriture pendant ce temps (voir machine_command_service).
+    db.commit()
     try:
-        machine = line_queue_service.lancer_of_sur_ligne(
-            db, of, preempt_disposition=disposition
-        )
-    except FabricationError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, exc.message)
+        production_control_service.lancer_of(of.id, preempt_disposition=disposition)
     except AppError as exc:
+        # FabricationError → 409 ; automate injoignable → 503 ; sans accusé → 504.
         raise HTTPException(exc.status_code, exc.message)
-    db.flush()
     db.refresh(of)
-    broadcast_service.diffuser_machine(db, machine)
     broadcast_service.diffuser(
         {"type": "ordres_update", "raison": "lancement", "numero": of.numero}
     )
@@ -277,3 +292,21 @@ def mettre_en_file(
         {"type": "ordres_update", "raison": "mise_en_file", "numero": of.numero}
     )
     return _of_read(of)
+
+
+@router.get("/{of_id}/bilan-pdf")
+def telecharger_bilan_of_pdf_par_id(
+    of_id: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Télécharge le Bilan Ordre de Fabrication (OF) officiel en PDF."""
+    pdf_bytes, filename = pdf_service.generer_bilan_of_exact_pdf(db, of_id=of_id)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+

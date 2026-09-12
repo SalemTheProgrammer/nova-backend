@@ -51,3 +51,16 @@ class AgentTurn(BaseModel):
 class ChatHistoryResponse(BaseModel):
     thread_id: str
     turns: list[AgentTurn]
+
+
+class ChatAccueilRequest(BaseModel):
+    thread_id: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Thread à ouvrir par l'accueil ; absent = nouveau thread.",
+    )
+
+
+class ChatAccueilResponse(BaseModel):
+    thread_id: str
+    messages: list[str]
