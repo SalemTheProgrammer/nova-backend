@@ -23,7 +23,7 @@ from app.models import (
     OrdreFabrication,
     QualityEvent,
 )
-from app.models.enums import CauseArret, StatutMachine, StatutOF, TypeEvenementQualite
+from app.models.enums import StatutMachine, StatutOF, TypeEvenementQualite
 from app.services import trs_service
 
 FENETRE_DEFAUT = timedelta(hours=8)
@@ -31,17 +31,11 @@ BUCKET_MINUTES = 5
 FENETRE_CADENCE = timedelta(minutes=5)
 ACTIVITE_LIMITE = 30
 
-# Catégorisation des causes d'arrêt (affichage façon "arrêts planifiés / non
-# planifiés / micro-arrêts", norme AFNOR NF E60-182 : TR->arrêts planifiés,
-# TF->arrêts non planifiés).
-CAUSES_PLANIFIEES = {
-    CauseArret.MAINTENANCE_PLANIFIEE,
-    CauseArret.CHANGEMENT_SERIE,
-    CauseArret.REGLAGE_MACHINE,
-    CauseArret.NETTOYAGE,
-    CauseArret.PRELEVEMENT_QUALITE,
-}
-CAUSES_MICRO = {CauseArret.MICRO_ARRET}
+# Catégorisation des causes d'arrêt (planifiés / non planifiés / micro-arrêts) :
+# la MÊME que celle du calcul du TRS, sinon le tableau de bord classerait un
+# arrêt comme planifié tout en le comptant contre la disponibilité.
+CAUSES_PLANIFIEES = trs_service.CAUSES_PLANIFIEES
+CAUSES_MICRO = trs_service.CAUSES_MICRO
 
 
 @dataclass
@@ -192,8 +186,8 @@ def construire_resume(
     if quantite_bonne == 0 and machines_bonnes > 0:
         quantite_bonne = machines_bonnes
         quantite_rejetee = machines_rejets
-    if production_cible <= 0:
-        production_cible = Decimal("1000")
+    # Sans OF en cours, pas de cible : 0 (le frontend n'affiche alors ni cible ni
+    # avancement). Une cible fictive de 1000 faisait afficher un avancement inventé.
     production_reelle = quantite_bonne + quantite_rejetee
 
     # The header must follow an OF that is actually mounted on a machine. An
@@ -249,22 +243,26 @@ def construire_resume(
         reverse=True,
     )[:5]
 
-    # Fiabilité (MTTR / MTBF / MTTF) sur la fenêtre observée. MTTF = MTBF - MTTR
-    # (temps de bon fonctionnement, hors durée d'intervention — relation standard
-    # MTBF = MTTF + MTTR).
-    nb_pannes = len(downtimes)
-    fenetre_s = Decimal(str((jusqua - depuis).total_seconds()))
-    nb_machines = Decimal(len(machines) or 1)
+    # Fiabilité sur la fenêtre observée, relation standard MTBF = MTTF + MTTR :
+    # - une PANNE est un arrêt non planifié hors micro-arrêt (un prélèvement ou un
+    #   changement de série planifiés ne sont pas des défaillances) ;
+    # - MTTR = durée de ces pannes / nombre de pannes ;
+    # - MTTF = temps de bon fonctionnement (TF des machines requises) / nombre de
+    #   pannes. Avant : toutes les machines actives × la fenêtre, machines au
+    #   repos comprises, ce qui gonflait le MTBF ; et MTTF = MTBF − MTTR retirait
+    #   la durée de réparation deux fois.
+    nb_pannes = sum(
+        1 for d in downtimes if d.cause not in CAUSES_PLANIFIEES and d.cause not in CAUSES_MICRO
+    )
+    temps_fonctionnement = trs_detail.temps.tf if trs_detail else Decimal("0")
     if nb_pannes > 0:
-        mttr_s = (temps_arret_total / Decimal(nb_pannes)).quantize(Decimal("0.1"))
-        temps_dispo = nb_machines * fenetre_s - temps_arret_total
-        if temps_dispo < 0:
-            temps_dispo = Decimal("0")
-        mtbf_s = (temps_dispo / Decimal(nb_pannes)).quantize(Decimal("0.1"))
+        mttr_s = (non_planifies_duree / Decimal(nb_pannes)).quantize(Decimal("0.1"))
+        mttf_s = (temps_fonctionnement / Decimal(nb_pannes)).quantize(Decimal("0.1"))
     else:
+        # Aucune panne observée : le temps de fonctionnement est un minorant.
         mttr_s = Decimal("0")
-        mtbf_s = (nb_machines * fenetre_s).quantize(Decimal("0.1"))
-    mttf_s = max(Decimal("0"), mtbf_s - mttr_s)
+        mttf_s = temps_fonctionnement.quantize(Decimal("0.1"))
+    mtbf_s = mttf_s + mttr_s
 
     alertes = list(
         db.execute(
@@ -273,7 +271,16 @@ def construire_resume(
     )
 
     serie = _serie_production(db, depuis=depuis, jusqua=jusqua, machine_ids=machine_ids if ligne_id is not None else None)
-    cadence = _cadence_actuelle(db, jusqua=jusqua, machine_ids=machine_ids if ligne_id is not None else None)
+    # La cadence du bandeau est comparée à la cadence nominale de L'OF affiché :
+    # elle doit donc être celle de cet OF. La cadence de toute l'usine rapportée
+    # au nominal d'un seul article gonflait le pourcentage dès que plusieurs
+    # machines tournaient.
+    cadence = _cadence_actuelle(
+        db,
+        jusqua=jusqua,
+        machine_ids=machine_ids if ligne_id is not None else None,
+        ordre_id=of_actif_model.id if of_actif_model is not None else None,
+    )
     activite = _activite_recente(db, machine_ids=machine_ids if ligne_id is not None else None)
 
     # Taux de charge / d'engagement : multiplicateurs configurés sur la ligne
@@ -455,16 +462,23 @@ def _activite_recente(
 
 
 def _cadence_actuelle(
-    db: Session, *, jusqua: datetime, machine_ids: list[int] | None = None
+    db: Session,
+    *,
+    jusqua: datetime,
+    machine_ids: list[int] | None = None,
+    ordre_id: int | None = None,
 ) -> Decimal:
-    """Unités bonnes produites par minute sur la fenêtre glissante des 5 dernières minutes."""
+    """Unités bonnes produites par minute sur la fenêtre glissante des 5 dernières
+    minutes — pour un OF précis si `ordre_id` est donné."""
     depuis = jusqua - FENETRE_CADENCE
     stmt = select(QualityEvent).where(
         QualityEvent.type == TypeEvenementQualite.BONNE,
         QualityEvent.created_at >= depuis,
         QualityEvent.created_at <= jusqua,
     )
-    if machine_ids is not None:
+    if ordre_id is not None:
+        stmt = stmt.where(QualityEvent.ordre_fabrication_id == ordre_id)
+    elif machine_ids is not None:
         stmt = stmt.where(QualityEvent.machine_id.in_(machine_ids or [-1]))
     total = sum(e.quantite for e in db.execute(stmt).scalars())
     minutes = Decimal(str(FENETRE_CADENCE.total_seconds() / 60))
