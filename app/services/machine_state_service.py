@@ -98,9 +98,16 @@ def appliquer(
 
     elif type_evenement == TypeEvenementMachine.MACHINE_STOPPED:
         machine.statut = StatutMachine.ARRET
-        _ouvrir_arret(
-            db, machine, cause=CauseArret.AUTRE, comment=payload.get("comment") or "Arrêt machine"
-        )
+        # Un arrêt ne compte que si la machine DEVAIT produire. Sans OF chargé,
+        # c'est une machine au repos (temps non requis, NF E 60-182), pas un
+        # arrêt : l'ouvrir ferait cumuler du temps d'arrêt indéfiniment à une
+        # machine simplement inoccupée.
+        if machine.ordre_fabrication_id is not None:
+            _ouvrir_arret(
+                db, machine, cause=CauseArret.AUTRE, comment=payload.get("comment") or "Arrêt machine"
+            )
+        else:
+            _fermer_arret(db, machine)
 
     elif type_evenement == TypeEvenementMachine.MACHINE_IDLE:
         # Pause courte signalée par l'automate : pas d'arrêt déclaré.
@@ -222,5 +229,10 @@ def appliquer(
 
     elif type_evenement == TypeEvenementMachine.PRODUCTION_COUNT_UPDATED:
         pass  # réservé pour une future synchronisation de totalisateur capteur
+
+    if detacher_ordre:
+        # OF soldé : la machine n'a plus rien à produire, un arrêt encore
+        # ouvert ne doit pas continuer à cumuler du temps.
+        _fermer_arret(db, machine)
 
     return detacher_ordre

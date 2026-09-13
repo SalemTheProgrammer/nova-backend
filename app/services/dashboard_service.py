@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -209,7 +209,14 @@ def construire_resume(
         default=None,
     )
 
-    downtime_stmt = select(DowntimeEvent).where(DowntimeEvent.start_time >= depuis)
+    # Tout arrêt qui CHEVAUCHE la fenêtre, y compris un arrêt ouvert commencé
+    # avant elle (il disparaissait totalement dès 8 h d'ancienneté), et chaque
+    # durée est bornée à la fenêtre : un arrêt ne peut pas y peser plus que la
+    # fenêtre elle-même (sinon le temps disponible du MTBF devenait négatif).
+    downtime_stmt = select(DowntimeEvent).where(
+        DowntimeEvent.start_time < jusqua,
+        or_(DowntimeEvent.end_time.is_(None), DowntimeEvent.end_time > depuis),
+    )
     if ligne_id is not None:
         downtime_stmt = downtime_stmt.where(DowntimeEvent.machine_id.in_(machine_ids or [-1]))
     downtimes = list(db.execute(downtime_stmt).scalars())
@@ -222,8 +229,9 @@ def construire_resume(
     non_planifies_actifs = 0
     micro_nombre = 0
     for d in downtimes:
-        end = d.end_time or jusqua
-        duree = Decimal(str((end - d.start_time).total_seconds()))
+        debut = max(d.start_time, depuis)
+        fin = min(d.end_time or jusqua, jusqua)
+        duree = Decimal(str(max(0.0, (fin - debut).total_seconds())))
         temps_arret_total += duree
         causes[d.cause.value] = causes.get(d.cause.value, Decimal("0")) + duree
         actif = d.end_time is None
