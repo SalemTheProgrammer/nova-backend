@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -377,6 +377,33 @@ def construire_resume(
     )
 
 
+def _fenetre_activite(
+    db: Session, machine_ids: list[int], debut: datetime, fin: datetime
+) -> tuple[datetime, datetime] | None:
+    """Fenêtre d'activité réelle dans [debut, fin] : du premier au dernier
+    événement produit sur ces machines. None si aucune production. Garantit une
+    durée minimale non nulle pour un calcul de ratios sain."""
+    if not machine_ids:
+        return None
+    borne = db.execute(
+        select(func.min(QualityEvent.created_at), func.max(QualityEvent.created_at)).where(
+            QualityEvent.machine_id.in_(machine_ids),
+            QualityEvent.created_at >= debut,
+            QualityEvent.created_at <= fin,
+        )
+    ).one()
+    premier, dernier = borne
+    if premier is None:
+        return None
+    # Élargit d'un cycle de part et d'autre pour éviter une fenêtre quasi nulle
+    # (un seul créneau de production), bornée à la période.
+    deb = max(debut, premier - timedelta(minutes=30))
+    end = min(fin, dernier + timedelta(minutes=30))
+    if end <= deb:
+        end = min(fin, deb + timedelta(minutes=1))
+    return deb, end
+
+
 def construire_historique_oee(
     db: Session, *, ligne_id: int | None = None, periode: str = "week"
 ) -> list[PointOEE]:
@@ -406,13 +433,24 @@ def construire_historique_oee(
         origine = (jusqua - timedelta(days=6)).replace(hour=0, minute=0, second=0, microsecond=0)
         fmt = "%d/%m"
 
+    machine_ids = [m.id for m in machines]
     points: list[PointOEE] = []
     for i in range(n_buckets):
         debut = origine + bucket * i
         fin = min(debut + bucket, jusqua)
         if fin <= debut:
             continue
-        resultat = trs_service.calculer_trs_ligne(db, machines, depuis=debut, jusqua=fin)
+        # Sans calendrier d'équipes, une journée entière (24 h) comme temps requis
+        # écrase la performance (production ~10 h → TRS ~30 %). On borne donc le
+        # calcul à la fenêtre d'ACTIVITÉ réelle de la période (du premier au
+        # dernier événement produit), méthode standard : le TRS reflète alors la
+        # période où l'équipement était réellement sollicité.
+        activite = _fenetre_activite(db, machine_ids, debut, fin)
+        if activite is None:
+            resultat = None
+        else:
+            deb_a, fin_a = activite
+            resultat = trs_service.calculer_trs_ligne(db, machines, depuis=deb_a, jusqua=fin_a)
         if resultat is None or (resultat.quantite_bonne + resultat.quantite_rejetee <= 0):
             # Créneau sans production : TRS et ses composantes sont à 0.
             # Conserver le point assure une ligne temporelle complète et continue.
