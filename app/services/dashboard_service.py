@@ -440,17 +440,23 @@ def construire_historique_oee(
         fin = min(debut + bucket, jusqua)
         if fin <= debut:
             continue
-        # Sans calendrier d'équipes, une journée entière (24 h) comme temps requis
-        # écrase la performance (production ~10 h → TRS ~30 %). On borne donc le
-        # calcul à la fenêtre d'ACTIVITÉ réelle de la période (du premier au
-        # dernier événement produit), méthode standard : le TRS reflète alors la
-        # période où l'équipement était réellement sollicité.
-        activite = _fenetre_activite(db, machine_ids, debut, fin)
-        if activite is None:
-            resultat = None
+        # Le dernier créneau (période EN COURS) reflète le TRS courant, comme la
+        # jauge du tableau de bord : sinon une journée qui vient de démarrer plonge
+        # à ~0 %, incohérent avec les jauges. `depuis=None` = même calcul que le
+        # dashboard (borné au début d'activité de chaque machine).
+        if i == n_buckets - 1:
+            resultat = trs_service.calculer_trs_ligne(db, machines, depuis=None, jusqua=fin)
         else:
-            deb_a, fin_a = activite
-            resultat = trs_service.calculer_trs_ligne(db, machines, depuis=deb_a, jusqua=fin_a)
+            # Sans calendrier d'équipes, une journée entière (24 h) comme temps
+            # requis écrase la performance (production ~10 h → TRS ~30 %). On borne
+            # donc le calcul à la fenêtre d'ACTIVITÉ réelle (du premier au dernier
+            # événement produit) : le TRS reflète la période réellement sollicitée.
+            activite = _fenetre_activite(db, machine_ids, debut, fin)
+            resultat = (
+                None
+                if activite is None
+                else trs_service.calculer_trs_ligne(db, machines, depuis=activite[0], jusqua=activite[1])
+            )
         if resultat is None or (resultat.quantite_bonne + resultat.quantite_rejetee <= 0):
             # Créneau sans production : TRS et ses composantes sont à 0.
             # Conserver le point assure une ligne temporelle complète et continue.
