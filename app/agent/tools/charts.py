@@ -135,6 +135,20 @@ def generer_graphique(
             return str(exc), None
         nb_points = sum(len(s["data"]) for s in spec["series"])
         if nb_points == 0:
+            # Pas d'artifact (None) : on ne montre pas un graphique vide, on
+            # renvoie une phrase claire que le modèle transmet tel quel.
+            if dataset == "pareto_arrets":
+                return (
+                    f"Aucun arrêt significatif sur les {periode_heures} dernières heures : "
+                    "la ligne tourne bien, il n'y a pas de Pareto à afficher.",
+                    None,
+                )
+            if dataset == "rebuts_par_cause":
+                return (
+                    f"Aucun rebut significatif sur les {periode_heures} dernières heures : "
+                    "la qualité est bonne, rien à répartir.",
+                    None,
+                )
             return (
                 f"Aucune donnée pour « {spec['title']} » sur cette période — "
                 "le graphique serait vide.",

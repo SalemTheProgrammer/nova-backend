@@ -199,11 +199,15 @@ def _dataset_pareto_arrets(
         minutes_par_cause[cause] = (
             minutes_par_cause.get(cause, 0.0) + (fin - debut).total_seconds() / 60
         )
+    # Minutes ENTIÈRES et on écarte les causes négligeables (< 1 min) : un Pareto
+    # avec une barre à « 0,45 » est illisible pour un décideur. Si tout est
+    # négligeable, la liste est vide et l'outil affiche un message clair à la place.
     points = [
-        {"x": cause, "y": round(minutes, 1)}
+        {"x": cause, "y": int(round(minutes))}
         for cause, minutes in sorted(
             minutes_par_cause.items(), key=lambda kv: kv[1], reverse=True
         )
+        if minutes >= 1
     ]
     libelle = _libelle_scope(db, scope, id)
     return f"Pareto des arrêts ({periode_heures} h) — {libelle}", [
