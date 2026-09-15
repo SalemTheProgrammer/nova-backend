@@ -1,7 +1,7 @@
 """Authentification par numéro de téléphone (code de vérification WhatsApp)."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -57,6 +57,27 @@ def demo_login(db: Session = Depends(get_db)) -> VerifierCodeResponse:
     user = auth_service.connexion_demo(db)
     token = auth_service.creer_token(user)
     return VerifierCodeResponse(token=token, user=UtilisateurRead.model_validate(user))
+
+
+@router.post("/demo/reset-usine")
+def demo_reset_usine(db: Session = Depends(get_db)) -> dict:
+    """Prépare un état de démonstration crédible en un clic (bouton de la page de
+    connexion) : historique à zéro, coûts réalistes, échéances tenables, 3 lignes
+    démarrées et arrêts passés pour un Pareto parlant. Réservé au mode démo."""
+    if not get_settings().demo_login_enabled:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Le mode démonstration n'est pas activé.")
+    from app.api.routes.routes_kpi import clear_kpi_caches
+    from app.services import broadcast_service, demo_service
+
+    resume = demo_service.preparer(db)
+    clear_kpi_caches()
+    broadcast_service.diffuser({"type": "reset"})
+    return {
+        "machines_demarrees": resume.machines_demarrees,
+        "arrets_injectes": resume.arrets_injectes,
+        "articles_chiffres": resume.articles_chiffres,
+        "of_a_l_heure": resume.of_a_l_heure,
+    }
 
 
 @router.get("/me", response_model=UtilisateurRead)
