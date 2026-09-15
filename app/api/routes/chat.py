@@ -16,6 +16,7 @@ from app.agent.runner import (
     run_agent,
     stream_agent,
 )
+from app.agent.tools import READONLY_TOOL_NAMES
 from app.core.security import get_current_user
 from app.db.session import session_scope
 from app.models.utilisateur import Utilisateur
@@ -30,6 +31,20 @@ from app.services import ai_agent_service, auth_service
 
 router = APIRouter(tags=["agent"])
 
+_READONLY = frozenset(READONLY_TOOL_NAMES)
+
+
+def _outils_web(user: Utilisateur) -> list[str]:
+    """Périmètre d'outils du canal WEB : Nova y DISCUTE et MONTRE, mais n'agit
+    pas. On restreint donc à la lecture seule (TRS, stock, alertes, documents,
+    graphiques/jauges…) quel que soit le rôle — les commandes atelier et les
+    envois restent sur WhatsApp. La garantie forte est côté graphe
+    (`outils_autorises` filtre chaque appel), ceci n'en est que l'entrée."""
+    autorises = auth_service.outils_pour(user)  # None = admin (tous les outils)
+    if autorises is None:
+        return list(READONLY_TOOL_NAMES)
+    return [t for t in autorises if t in _READONLY]
+
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
@@ -39,7 +54,7 @@ async def chat(
         payload.message,
         thread_id=payload.thread_id,
         mode=payload.mode,
-        outils_autorises=auth_service.outils_pour(user),
+        outils_autorises=_outils_web(user),
     )
     return ChatResponse(thread_id=payload.thread_id, response=response)
 
@@ -88,7 +103,7 @@ async def chat_stream(
     payload: ChatRequest, user: Utilisateur = Depends(get_current_user)
 ) -> StreamingResponse:
     """Stream the agent run as Server-Sent Events (tokens + tool steps + artifacts)."""
-    outils_autorises = auth_service.outils_pour(user)
+    outils_autorises = _outils_web(user)
 
     async def generate() -> AsyncIterator[str]:
         async for event in stream_agent(
