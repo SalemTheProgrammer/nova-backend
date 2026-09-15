@@ -9,6 +9,7 @@ l'hôte Sparkplug (les commandes machine partent réellement aux automates).
 """
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -18,8 +19,22 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.models import Article, DowntimeEvent, Machine, OrdreFabrication
-from app.models.enums import CauseArret, StatutMachine, StatutOF
+from app.models import (
+    Article,
+    DowntimeEvent,
+    Machine,
+    MaintenanceEvent,
+    OrdreFabrication,
+    QualityEvent,
+)
+from app.models.enums import (
+    CauseArret,
+    CauseRebut,
+    StatutMachine,
+    StatutOF,
+    TypeEvenementQualite,
+    TypeMaintenance,
+)
 from app.protocols.sparkplug_b import runtime
 from app.services import atelier_reset_service, machine_command_service
 
@@ -54,12 +69,28 @@ ARRETS_HISTORIQUES = [
 ]
 
 
+# Machines qui « ont produit » ces derniers jours (pour l'historique riche).
+MACHINES_HISTORIQUE = ["M-01", "M-02", "M-04", "M-05", "M-07"]
+JOURS_HISTORIQUE = 7
+CAUSES_ARRET_VARIEES = [
+    CauseArret.PANNE_MECANIQUE, CauseArret.CHANGEMENT_SERIE, CauseArret.REGLAGE_MACHINE,
+    CauseArret.PANNE_ELECTRIQUE, CauseArret.NETTOYAGE, CauseArret.MANQUE_OPERATEUR,
+]
+CAUSES_REBUT_VARIEES = [
+    CauseRebut.DEFAUT_DIMENSIONNEL, CauseRebut.DEFAUT_VISUEL, CauseRebut.MAUVAIS_REGLAGE,
+    CauseRebut.DEFAUT_MATIERE,
+]
+
+
 @dataclass(frozen=True)
 class ResumeDemo:
     machines_demarrees: list[str]
     arrets_injectes: int
     articles_chiffres: int
     of_a_l_heure: int
+    evenements_qualite: int
+    maintenances: int
+    of_termines: int
 
 
 def _appliquer_parametres(db: Session) -> int:
@@ -71,6 +102,103 @@ def _appliquer_parametres(db: Session) -> int:
         if m.code in COUTS:
             m.cout_horaire = Decimal(COUTS[m.code])
     return n
+
+
+def _semer_historique(db: Session) -> tuple[int, int, int]:
+    """Sème un historique crédible sur les derniers jours pour que tous les écrans
+    (qualité, arrêts, maintenance, historique OEE, OF terminés) soient vivants —
+    et pas seulement la production en direct. Renvoie (qualité, maintenances, OF
+    terminés). Rien dans les 8 dernières heures : le TRS courant reste propre."""
+    rng = random.Random(42)
+    now = datetime.utcnow()
+    machines = {
+        m.code: m
+        for m in db.execute(select(Machine).where(Machine.code.in_(MACHINES_HISTORIQUE))).scalars()
+    }
+
+    q_events = 0
+    arrets = 0
+    # Un historique jour par jour (hors journée en cours, hors 8 dernières heures).
+    for jour in range(1, JOURS_HISTORIQUE + 1):
+        minuit = (now - timedelta(days=jour)).replace(hour=0, minute=0, second=0, microsecond=0)
+        for code, m in machines.items():
+            if m.temps_cycle_cible_s is None or rng.random() < 0.12:
+                continue  # une machine peut être à l'arrêt certains jours
+            cadence = 60.0 / float(m.temps_cycle_cible_s)  # unités / min
+            # ~10 h de production par jour, en créneaux horaires.
+            heure_debut = rng.randint(6, 8)
+            for h in range(heure_debut, heure_debut + rng.randint(8, 11)):
+                t = minuit + timedelta(hours=h, minutes=rng.randint(0, 40))
+                if t > now - timedelta(hours=8):
+                    continue
+                bonnes = int(cadence * rng.uniform(38, 55))  # sous la cadence nominale
+                db.add(QualityEvent(
+                    machine_id=m.id, type=TypeEvenementQualite.BONNE,
+                    quantite=bonnes, created_at=t,
+                ))
+                q_events += 1
+                if rng.random() < 0.35:  # rebuts épisodiques
+                    db.add(QualityEvent(
+                        machine_id=m.id, type=TypeEvenementQualite.REBUT,
+                        quantite=max(1, int(bonnes * rng.uniform(0.01, 0.05))),
+                        cause=rng.choice(CAUSES_REBUT_VARIEES), created_at=t + timedelta(minutes=5),
+                    ))
+                    q_events += 1
+            # 0 à 2 arrêts dans la journée.
+            for _ in range(rng.randint(0, 2)):
+                debut = minuit + timedelta(hours=rng.randint(6, 18), minutes=rng.randint(0, 59))
+                if debut > now - timedelta(hours=8):
+                    continue
+                duree = rng.randint(5, 55)
+                db.add(DowntimeEvent(
+                    machine_id=m.id, cause=rng.choice(CAUSES_ARRET_VARIEES),
+                    start_time=debut, end_time=debut + timedelta(minutes=duree),
+                    operator_comment="Historique (démonstration)",
+                ))
+                arrets += 1
+
+    # Interventions de maintenance : préventives terminées, une corrective, une en cours.
+    maint = 0
+    plan = [
+        ("M-02", TypeMaintenance.PREVENTIVE, "Graissage et contrôle périodique", 4, 3, True),
+        ("M-05", TypeMaintenance.CORRECTIVE, "Remplacement courroie d'entraînement", 2, 2, True),
+        ("M-07", TypeMaintenance.PREVENTIVE, "Changement des filtres", 6, 5, True),
+        ("M-09", TypeMaintenance.PREVENTIVE, "Calibration doseuse (en cours)", 0, None, False),
+    ]
+    for code, type_m, desc, il_y_a_j, duree_h, terminee in plan:
+        m = machines.get(code) or db.execute(
+            select(Machine).where(Machine.code == code)
+        ).scalar_one_or_none()
+        if m is None:
+            continue
+        debut = now - timedelta(days=il_y_a_j, hours=2)
+        db.add(MaintenanceEvent(
+            machine_id=m.id, type=type_m, description=desc, start_time=debut,
+            end_time=(debut + timedelta(hours=duree_h)) if terminee and duree_h else None,
+            prochaine_maintenance=(date.today() + timedelta(days=rng.randint(20, 60)))
+            if type_m == TypeMaintenance.PREVENTIVE else None,
+        ))
+        maint += 1
+
+    # Quelques OF marqués TERMINÉ avec des quantités réalistes (production passée).
+    termines = 0
+    candidats = db.execute(
+        select(OrdreFabrication)
+        .where(OrdreFabrication.statut == StatutOF.PLANIFIE)
+        .order_by(OrdreFabrication.id.desc())
+        .limit(6)
+    ).scalars().all()
+    for i, of in enumerate(candidats):
+        planifiee = float(of.quantite_planifiee)
+        rejets = int(planifiee * rng.uniform(0.01, 0.04))
+        of.quantite_bonne = Decimal(int(planifiee) - rejets)
+        of.quantite_rejetee = Decimal(rejets)
+        of.statut = StatutOF.TERMINE
+        of.date_debut_reelle = now - timedelta(days=i + 2, hours=6)
+        of.date_fin_reelle = now - timedelta(days=i + 2, hours=1)
+        termines += 1
+
+    return q_events, maint, termines
 
 
 def preparer(db: Session) -> ResumeDemo:
@@ -120,7 +248,8 @@ def preparer(db: Session) -> ResumeDemo:
             logger.warning("demo_demarrage_echec", machine=code, error=str(exc))
         time.sleep(1)
 
-    # 4. Arrêts historiques pour un Pareto parlant.
+    # 4. Arrêts récents (Pareto 24 h parlant) + historique riche sur 7 jours
+    #    (qualité, arrêts, maintenances, OF terminés) pour des écrans vivants.
     now = datetime.utcnow()
     codes = {m.code: m.id for m in db.execute(select(Machine)).scalars()}
     injectes = 0
@@ -134,12 +263,19 @@ def preparer(db: Session) -> ResumeDemo:
             operator_comment="Historique (démonstration)",
         ))
         injectes += 1
+    q_events, maint, termines = _semer_historique(db)
     db.commit()
 
-    logger.info("demo_prepare", machines=demarrees, arrets=injectes)
+    logger.info(
+        "demo_prepare", machines=demarrees, arrets=injectes,
+        qualite=q_events, maintenances=maint, of_termines=termines,
+    )
     return ResumeDemo(
         machines_demarrees=demarrees,
         arrets_injectes=injectes,
         articles_chiffres=articles,
         of_a_l_heure=a_l_heure,
+        evenements_qualite=q_events,
+        maintenances=maint,
+        of_termines=termines,
     )

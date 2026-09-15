@@ -77,6 +77,9 @@ def demo_reset_usine(db: Session = Depends(get_db)) -> dict:
         "arrets_injectes": resume.arrets_injectes,
         "articles_chiffres": resume.articles_chiffres,
         "of_a_l_heure": resume.of_a_l_heure,
+        "evenements_qualite": resume.evenements_qualite,
+        "maintenances": resume.maintenances,
+        "of_termines": resume.of_termines,
     }
 
 
