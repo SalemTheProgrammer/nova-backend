@@ -272,11 +272,10 @@ def _regle_arret_bloquant(db: Session, nouvelles: list[AgentProposal]) -> None:
         )
         if alternative is not None:
             diagnostic = (
-                f"{machine.code} est arrêtée depuis {duree_txt} ({cause_txt}) et bloque "
-                f"l'OF {of.numero} ({of.quantite_planifiee} {of.unite.value} de "
-                f"{of.article.code}).{cout_txt} La ligne {alternative.code} est la "
-                f"meilleure alternative : score {alternative.score * 100:.0f}/100 "
-                f"({alternative.raison})."
+                f"{machine.code} est arrêtée depuis {duree_txt} et bloque l'OF {of.numero} "
+                f"({of.quantite_planifiee} {of.unite.value} de {of.article.code}).{cout_txt} "
+                f"La ligne {alternative.code} est la mieux placée pour reprendre : "
+                f"c'est la plus disponible en ce moment."
             )
             nouvelles.append(
                 _proposer(
@@ -541,11 +540,10 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
         )
         if alternative is not None:
             diagnostic = (
-                f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
-                f"{date_usine(fin_estimee):%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
-                f"({of.date_echeance.isoformat()}). La ligne {alternative.code} est la "
-                f"meilleure alternative : score {alternative.score * 100:.0f}/100 "
-                f"({alternative.raison})."
+                f"Au rythme actuel, l'OF {of.numero} sur {machine.code} finirait avec "
+                f"{retard_j} j de retard sur l'échéance du {of.date_echeance:%d/%m}. "
+                f"La ligne {alternative.code} est la mieux placée pour rattraper : "
+                f"c'est la plus disponible en ce moment."
             )
             nouvelles.append(
                 _proposer(
@@ -568,10 +566,10 @@ def _regle_retard_of(db: Session, nouvelles: list[AgentProposal]) -> None:
             )
         else:
             diagnostic = (
-                f"Au rythme actuel, l'OF {of.numero} ({machine.code}) finirait le "
-                f"{date_usine(fin_estimee):%Y-%m-%d}, soit {retard_j} j après l'échéance prévue "
-                f"({of.date_echeance.isoformat()}). Aucune ligne alternative n'a de "
-                "machine libre : je recommande de signaler le retard dès maintenant."
+                f"Au rythme actuel, l'OF {of.numero} sur {machine.code} finirait avec "
+                f"{retard_j} j de retard sur l'échéance du {of.date_echeance:%d/%m}. "
+                f"Aucune autre ligne n'est libre pour rattraper : mieux vaut signaler "
+                f"le retard dès maintenant."
             )
             nouvelles.append(
                 _proposer(

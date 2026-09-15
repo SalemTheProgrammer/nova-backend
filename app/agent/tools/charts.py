@@ -210,14 +210,14 @@ def generer_jauge(
             ]
             if not machines:
                 return "Aucune machine active avec temps de cycle : jauge impossible.", None
-            resultats = [trs_service.calculer_trs_machine(db, m) for m in machines]
+            # Même calcul que le tableau de bord (somme des temps puis ratios),
+            # sinon la jauge de Nova affiche un TRS différent de celui du dashboard.
+            r = trs_service.calculer_trs_ligne(db, machines)
+            if r is None:
+                return "Aucune machine active avec temps de cycle : jauge impossible.", None
             valeurs = {
-                "trs": sum(float(r.trs) for r in resultats) / len(resultats),
-                "trg": sum(float(r.trg) for r in resultats) / len(resultats),
-                "tre": sum(float(r.tre) for r in resultats) / len(resultats),
-                "qualite": sum(float(r.tq) for r in resultats) / len(resultats),
-                "performance": sum(float(r.tp) for r in resultats) / len(resultats),
-                "disponibilite": sum(float(r.do) for r in resultats) / len(resultats),
+                "trs": float(r.trs), "trg": float(r.trg), "tre": float(r.tre),
+                "qualite": float(r.tq), "performance": float(r.tp), "disponibilite": float(r.do),
             }
             pct = valeurs[indicateur] * 100
             titre = f"{indicateur.upper()} — usine"
