@@ -226,7 +226,7 @@ def generer_jauge(
                 {
                     "kind": "gauge", "title": titre, "valeur_pct": round(pct, 1),
                     "objectif_pct": 74.0 if indicateur in ("trs", "trg", "tre") else None,
-                    "sous_titre": f"Moyenne de {len(machines)} machine(s) — {periode_heures} h",
+                    "sous_titre": f"Usine · {len(machines)} machines · {periode_heures} h",
                 },
             )
 
