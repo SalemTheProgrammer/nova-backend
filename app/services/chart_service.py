@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models import (
@@ -70,13 +70,47 @@ def _libelle_scope(db: Session, scope: str, id: int | None) -> str:
 
 
 def _heures(periode_heures: int) -> list[tuple[datetime, datetime, str]]:
-    """Fenêtres horaires (début, fin, étiquette) couvrant les N dernières heures."""
-    fin = datetime.utcnow().replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+    """Fenêtres (début, fin, étiquette) couvrant les N dernières heures, avec un
+    découpage ADAPTATIF : au-delà de 72 h une barre par heure serait illisible
+    (720 barres pour 30 jours), on passe donc à un découpage journalier avec des
+    étiquettes de date. En dessous, découpage horaire comme avant."""
+    now = datetime.utcnow()
+    if periode_heures <= 72:
+        fin = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        fenetres = []
+        for i in range(periode_heures, 0, -1):
+            debut = fin - timedelta(hours=i)
+            fenetres.append((debut, debut + timedelta(hours=1), f"{debut:%Hh}"))
+        return fenetres
+    n_jours = (periode_heures + 23) // 24
+    minuit = now.replace(hour=0, minute=0, second=0, microsecond=0)
     fenetres = []
-    for i in range(periode_heures, 0, -1):
-        debut = fin - timedelta(hours=i)
-        fenetres.append((debut, debut + timedelta(hours=1), f"{debut:%H}h"))
+    for j in range(n_jours - 1, -1, -1):
+        debut = minuit - timedelta(days=j)
+        fenetres.append((debut, min(debut + timedelta(days=1), now), f"{debut:%d/%m}"))
     return fenetres
+
+
+def _fenetre_activite(
+    db: Session, machine_ids: list[int], debut: datetime, fin: datetime
+) -> tuple[datetime, datetime] | None:
+    """Fenêtre d'activité réelle dans [debut, fin] (premier→dernier événement
+    produit). Sans calendrier d'équipes, borner un créneau JOURNALIER à son
+    activité évite d'écraser la performance sur 24 h. None si aucune production."""
+    if not machine_ids:
+        return None
+    premier, dernier = db.execute(
+        select(func.min(QualityEvent.created_at), func.max(QualityEvent.created_at)).where(
+            QualityEvent.machine_id.in_(machine_ids),
+            QualityEvent.created_at >= debut,
+            QualityEvent.created_at <= fin,
+        )
+    ).one()
+    if premier is None:
+        return None
+    deb = max(debut, premier - timedelta(minutes=30))
+    end = min(fin, dernier + timedelta(minutes=30))
+    return (deb, end if end > deb else min(fin, deb + timedelta(minutes=1)))
 
 
 def _dataset_trs_horaire(
@@ -94,19 +128,25 @@ def _dataset_trs_horaire(
         ]
         return f"TRS horaire — OF {of.numero}", [{"name": "TRS %", "data": points}]
     machines = _machines_du_scope(db, scope, id)
+    machine_ids = [m.id for m in machines if m.temps_cycle_cible_s]
+    journalier = periode_heures > 72
     points = []
     for debut, fin, label in _heures(periode_heures):
-        resultats = [
-            trs_service.calculer_trs_machine(db, m, depuis=debut, jusqua=fin)
-            for m in machines
-            if m.temps_cycle_cible_s
-        ]
-        trs = (
-            float(sum(r.trs for r in resultats) / len(resultats)) * 100 if resultats else 0.0
+        # Créneau journalier : borner à l'activité réelle (sinon 24 h de temps
+        # requis écrasent la performance). Créneau horaire : la fenêtre telle quelle.
+        fenetre = (debut, fin)
+        if journalier:
+            act = _fenetre_activite(db, machine_ids, debut, fin)
+            fenetre = act if act is not None else None
+        r = (
+            trs_service.calculer_trs_ligne(db, machines, depuis=fenetre[0], jusqua=fenetre[1])
+            if fenetre is not None
+            else None
         )
-        points.append({"x": label, "y": round(trs, 1)})
+        points.append({"x": label, "y": round(float(r.trs) * 100, 1) if r else 0.0})
     libelle = _libelle_scope(db, scope, id)
-    return f"TRS horaire — {libelle}", [{"name": "TRS %", "data": points}]
+    titre = ("Évolution du TRS" if journalier else "TRS horaire") + f" — {libelle}"
+    return titre, [{"name": "TRS %", "data": points}]
 
 
 def _dataset_production_horaire(
@@ -157,7 +197,7 @@ def _dataset_production_horaire(
         )
     libelle = _libelle_scope(db, scope, id)
     return (
-        f"Production horaire — {libelle}",
+        ("Production journalière" if periode_heures > 72 else "Production horaire") + f" — {libelle}",
         [{"name": "Bonnes", "data": bonnes}, {"name": "Rebuts", "data": rebuts}],
     )
 
@@ -310,7 +350,7 @@ def construire_graphique(
     dataset: str,
     scope: str = "usine",
     id: int | None = None,
-    periode_heures: int = 8,
+    periode_heures: int = 24,
     chart_type: str | None = None,
 ) -> dict:
     """Construit la spec de graphique pour un dataset du catalogue.
@@ -322,7 +362,7 @@ def construire_graphique(
         raise ValueError(
             f"Dataset inconnu : {dataset!r}. Choix : {', '.join(sorted(_BUILDERS))}."
         )
-    periode_heures = max(1, min(48, periode_heures))
+    periode_heures = max(1, min(8760, periode_heures))
     titre, series = _BUILDERS[dataset](db, scope, id, periode_heures)
     type_defaut = DATASETS[dataset][0]
     type_final = chart_type if chart_type in CHART_TYPES else type_defaut

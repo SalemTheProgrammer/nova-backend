@@ -86,7 +86,7 @@ def generer_graphique(
     scope: str = "usine",
     id: int | None = None,
     of_numero: str | None = None,
-    periode_heures: int = 8,
+    periode_heures: int = 24,
     type_graphique: str | None = None,
 ) -> tuple[str, dict | None]:
     """Génère un graphique affiché à l'opérateur. À utiliser DÈS QUE l'opérateur
@@ -106,7 +106,7 @@ def generer_graphique(
     ligne/machine. Pour "of", utilisez `of_numero` (ex. 'OF-2026-00039') plutôt
     que `id` : c'est le seul moyen fiable de cibler un OF précis, l'agent n'a
     normalement pas son id numérique interne sous la main.
-    `periode_heures` : fenêtre d'analyse (1 à 48, défaut 8).
+    `periode_heures` : fenêtre d'analyse EN HEURES, n'importe quelle durée — 24 = un jour (défaut), 48 = deux jours, 168 = 7 jours, 720 = 30 jours. Au-delà de 72 h, le découpage passe automatiquement au jour.
     `type_graphique` : "line", "bar", "area" ou "pie" pour surcharger le type par
     défaut du dataset (ex. l'opérateur demande explicitement un camembert).
 
@@ -165,7 +165,7 @@ def generer_jauge(
     scope: str = "usine",
     id: int | None = None,
     of_numero: str | None = None,
-    periode_heures: int = 8,
+    periode_heures: int = 24,
 ) -> tuple[str, dict | None]:
     """Affiche une JAUGE (cadran semi-circulaire, comme le dashboard) pour un
     indicateur en pourcentage. À utiliser quand l'opérateur veut UNE valeur
@@ -177,7 +177,7 @@ def generer_jauge(
     `scope` : "usine" (défaut), "ligne", "machine" ou "of" — avec `id` pour
     ligne/machine. Pour "of", utilisez `of_numero` (ex. 'OF-2026-00039') plutôt
     que `id`.
-    `periode_heures` : fenêtre d'analyse (1 à 48, défaut 8).
+    `periode_heures` : fenêtre d'analyse EN HEURES, n'importe quelle durée — 24 = un jour (défaut), 48 = deux jours, 168 = 7 jours, 720 = 30 jours. Au-delà de 72 h, le découpage passe automatiquement au jour.
 
     Sur WhatsApp la jauge part en image dans la conversation ; commente-la en
     une phrase (valeur, écart à l'objectif de 74 %).
@@ -185,7 +185,7 @@ def generer_jauge(
     indicateurs = ("trs", "trg", "tre", "qualite", "performance", "disponibilite")
     if indicateur not in indicateurs:
         return f"Indicateur invalide : {indicateur!r}. Choix : {', '.join(indicateurs)}.", None
-    periode_heures = max(1, min(48, periode_heures))
+    periode_heures = max(1, min(8760, periode_heures))
     with session_scope() as db:
         if scope == "of":
             reference = of_numero or (str(id) if id is not None else None)
