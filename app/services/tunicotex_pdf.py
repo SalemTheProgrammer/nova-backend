@@ -168,13 +168,17 @@ def _r1(p: ParametresRapport) -> tuple[str, bytes]:
         confection = [l for l in lignes if l.ligne.nature == "confection"]
         sortie = sum(l.sortie for l in confection)
         objectif = sum(l.objectif or 0 for l in confection)
+        comparables = [l for l in confection if l.objectif is not None and l.a_des_lectures]
+        taux_total = kpi.taux_atteinte(
+            sum(l.sortie for l in comparables), sum(l.objectif for l in comparables)
+        )
         total_rendement = kpi.rendement(
             sum(l.minutes_produites for l in confection),
             sum(l.minutes_presence for l in confection),
         )
         rangees.append([
             "<b>Total confection</b>", f"<b>{_nombre(objectif)}</b>", f"<b>{_nombre(sortie)}</b>",
-            f"<b>{_pct(kpi.taux_atteinte(sortie, objectif))}</b>",
+            f"<b>{_pct(taux_total)}</b>",
             f"<b>{sum(l.effectif for l in confection)}</b>",
             f"<b>{_rendement(total_rendement)}</b>",
         ])

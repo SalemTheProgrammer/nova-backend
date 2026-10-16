@@ -77,6 +77,7 @@ class PointHeureSchema(_Modele):
 class SituationAtelierSchema(_Modele):
     jour: date
     sortie: int
+    sortie_avec_objectif: int
     objectif: int
     taux: float | None
     rendement_moyen: float | None

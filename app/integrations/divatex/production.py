@@ -48,6 +48,7 @@ class PointHeure:
 class SituationAtelier:
     jour: date
     sortie: int
+    sortie_avec_objectif: int
     objectif: int
     taux: float | None
     rendement_moyen: float | None
@@ -253,11 +254,16 @@ def situation_atelier(jour: date) -> SituationAtelier:
     objectif = sum(l.objectif or 0 for l in confection)
     a_lectures = any(l.a_des_lectures for l in confection)
     avec_taux = [l for l in confection if l.taux is not None]
+    # le taux ne compare que les chaînes ayant un objectif (et des lectures)
+    comparables = [l for l in confection if l.objectif is not None and l.a_des_lectures]
+    sortie_avec_objectif = sum(l.sortie for l in comparables)
+    objectif_compare = sum(l.objectif for l in comparables)
     return SituationAtelier(
         jour=jour,
         sortie=sortie,
+        sortie_avec_objectif=sortie_avec_objectif,
         objectif=objectif,
-        taux=kpi.taux_atteinte(sortie, objectif) if a_lectures else None,
+        taux=kpi.taux_atteinte(sortie_avec_objectif, objectif_compare) if a_lectures else None,
         rendement_moyen=kpi.rendement(
             sum(l.minutes_produites for l in confection),
             sum(l.minutes_presence for l in confection),

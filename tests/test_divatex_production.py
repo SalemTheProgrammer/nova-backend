@@ -74,10 +74,34 @@ def test_tendance_au_plus_trois_requetes(divatex, capture_sql):
 def test_situation_atelier(divatex):
     s = situation_atelier(JOUR)
     assert (s.sortie, s.objectif, s.a_des_lectures, s.nb_of_en_retard) == (30, 502, True, 2)
-    assert s.taux == pytest.approx(30 / 502)
+    assert s.sortie_avec_objectif == 30
+    assert s.taux == pytest.approx(30 / 382)  # CH1-L1 : objectif mais aucune lecture
     assert s.lignes_sous_objectif == ["CH1-L2"]  # CH1-L1 sans lecture : ni sous ni au-dessus
     assert s.lignes_au_dessus == []
     assert s.rendement_moyen == pytest.approx(600 / 1440)
+
+
+def test_taux_atelier_ignore_chaine_sans_objectif(divatex):
+    from sqlalchemy import text
+
+    from app.integrations.divatex.connexion import vider_caches
+    from tests.divatex_fixtures import ID_GROUPE_CHAINE01
+
+    avant = situation_atelier(JOUR)
+    with divatex.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO chainemontage (IDChaineMontage, Code, ChaineMontage, Etat, IDGroupe) "
+            "VALUES (99, 'IBCH1', 'IBCH1', 1, :g)"), {"g": ID_GROUPE_CHAINE01})
+        for i in range(10):
+            conn.execute(text(
+                "INSERT INTO lectures (Date, IDChaineMontage, IDEmploye, IDOFabrication, "
+                "IDOperation, IdPhase, Quantite, Temps, Majoration, LibTaille) "
+                "VALUES (:d, 99, 0, 0, 0, 5, 1, 0, 0, 'M')"), {"d": JOUR.isoformat()})
+    vider_caches()
+    apres = situation_atelier(JOUR)
+    assert apres.sortie == avant.sortie + 10
+    assert apres.sortie_avec_objectif == avant.sortie_avec_objectif
+    assert apres.taux == pytest.approx(avant.taux)
 
 
 def test_situation_atelier_sans_lecture(divatex):
