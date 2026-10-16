@@ -73,19 +73,31 @@ def _synthese(
     scans: list[dict],
     presences: dict[tuple[int, date], float],
     codes_lignes: dict[int, str],
+    natures: dict[int, str],
 ) -> tuple[RendementOperateur, dict[date, tuple[float, float]]]:
-    """Agrège les scans d'un opérateur ; renvoie aussi (produites, présence) par jour."""
+    """Agrège les scans d'un opérateur ; renvoie aussi (produites, présence) par jour.
+
+    Rendement : seuls les scans des lignes de confection comptent (ruling R17) ; sur
+    les autres lignes le temps d'opération est un temps machine. Les jours sans scan de
+    confection figurent dans le détail avec (0, 0), donc sans rendement.
+    """
     p = kpi.parametres_rendement()
     cle_minutes = "avec_maj" if p.appliquer_majoration else "sans_maj"
-    par_jour: dict[date, list[float]] = defaultdict(lambda: [0.0, 0.0])
+    par_jour: dict[date, list[float]] = defaultdict(lambda: [0.0, 0.0, 0.0])
     scans_par_ligne: dict[int, int] = defaultdict(int)
     pieces = 0
     for r in scans:
-        par_jour[_en_date(r["Date"])][0] += float(r[cle_minutes] or 0) * p.facteur_temps
+        jour = _en_date(r["Date"])
+        cumul = par_jour[jour]
+        if natures.get(int(r["IDChaineMontage"])) == "confection":
+            cumul[0] += float(r[cle_minutes] or 0) * p.facteur_temps
+            cumul[2] = 1.0
         pieces += int(r["pieces"] or 0)
         scans_par_ligne[int(r["IDChaineMontage"])] += int(r["nb_scans"] or 0)
     estimee = False
     for jour, cumul in par_jour.items():
+        if not cumul[2]:
+            continue
         if (op.id, jour) in presences:
             cumul[1] = presences[(op.id, jour)]
         else:
@@ -111,6 +123,7 @@ def classement_operateurs(
     _verifier_periode(du, au)
     lignes = lister_lignes()
     codes = {l.id: l.code for l in lignes}
+    natures = {l.id: l.nature for l in lignes}
     params: dict = {"du": du.isoformat(), "au": au.isoformat()}
     if ligne_id is not None:
         filtre = "WHERE IDChaineMontage = :ligne AND Date BETWEEN :du AND :au"
@@ -140,7 +153,7 @@ def classement_operateurs(
         op = operateur(emp_id)
         if op is None:
             continue
-        total, _ = _synthese(op, lignes_emp, presences, codes)
+        total, _ = _synthese(op, lignes_emp, presences, codes, natures)
         resultat.append(total)
     resultat.sort(
         key=lambda x: (x.rendement is None, -(x.rendement or 0.0), x.operateur.nom_complet)
@@ -160,8 +173,10 @@ def fiche_operateur(operateur_id: int, du: date, au: date) -> FicheOperateur | N
         + _GROUP_SCANS,
         **params,
     )
-    codes = {l.id: l.code for l in lister_lignes()}
-    total, jours = _synthese(op, scans, _presences(du, au), codes)
+    lignes = lister_lignes()
+    codes = {l.id: l.code for l in lignes}
+    natures = {l.id: l.nature for l in lignes}
+    total, jours = _synthese(op, scans, _presences(du, au), codes, natures)
     par_jour = [(j, kpi.rendement(prod, pres)) for j, (prod, pres) in sorted(jours.items())]
     operations = [
         (r["Operation"] or "", int(r["pieces"] or 0))

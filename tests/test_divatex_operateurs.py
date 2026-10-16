@@ -96,3 +96,83 @@ def test_fiche_inconnue_ou_sans_scan(divatex):
     f = fiche_operateur(ID_EMP_BEN_SALAH_MOHAMED, REF_DATE, REF_DATE)
     assert f.operations == [] and f.par_jour == []
     assert f.total.rendement is None and f.total.ligne is None
+
+
+ID_EMP_TRICOT = 301
+ID_EMP_MIXTE = 302
+
+
+def _scans_tricot(engine, emp_id: int, jour: str, nb: int, temps: float = 100) -> None:
+    from tests.divatex_fixtures import ID_LIGNE_A3, ID_OF_90253
+
+    with engine.begin() as c:
+        c.execute(
+            text(
+                "INSERT INTO employe (IDEmploye, Matricule, Nom, Prenom, IDChaineMontage, "
+                "IDPosteTravail, NumCIN, NumCNSS) VALUES (:e, :m, 'TRICOT', 'Test', :l, 1, "
+                "'0', '0') ON CONFLICT(IDEmploye) DO NOTHING"
+            ),
+            {"e": emp_id, "m": f"M{emp_id}", "l": ID_LIGNE_A3},
+        )
+        for k in range(nb):
+            c.execute(
+                text(
+                    "INSERT INTO lectures (Date, SaisiLe, IDChaineMontage, IDEmploye, "
+                    "IDOFabrication, IDOperation, IdPhase, Quantite, Temps, Majoration, "
+                    "LibTaille) VALUES (:d, :s, :l, :e, :of, 1, 0, 1, :t, 1, 'M')"
+                ),
+                {"d": jour, "s": f"{jour} 1{k % 10}:00:00", "l": ID_LIGNE_A3, "e": emp_id,
+                 "of": ID_OF_90253, "t": temps},
+            )
+
+
+def test_tricotage_seul_rendement_none_et_dernier(divatex):
+    _scans_tricot(divatex, ID_EMP_TRICOT, REF_DATE.isoformat(), 5)
+    r = classement_operateurs(REF_DATE, REF_DATE)
+    tricot = next(x for x in r if x.operateur.id == ID_EMP_TRICOT)
+    assert tricot.rendement is None
+    assert tricot.minutes_produites == 0 and tricot.minutes_presence == 0
+    assert tricot.presence_estimee is False
+    assert tricot.pieces_operations == 5
+    assert tricot.ligne == "A3"
+    assert r[-1].operateur.id == ID_EMP_TRICOT
+    assert all(x.rendement is not None for x in r[:-1])
+
+
+def test_mixte_seules_les_minutes_confection_comptent(divatex):
+    from tests.divatex_fixtures import ID_OF_91294_1
+
+    # jour 27 : scans tricotage ; jour 28 : 10 scans confection x 20 min + tricotage
+    _scans_tricot(divatex, ID_EMP_MIXTE, "2026-08-27", 3)
+    _scans_tricot(divatex, ID_EMP_MIXTE, REF_DATE.isoformat(), 2)
+    with divatex.begin() as c:
+        for k in range(10):
+            c.execute(
+                text(
+                    "INSERT INTO lectures (Date, SaisiLe, IDChaineMontage, IDEmploye, "
+                    "IDOFabrication, IDOperation, IdPhase, Quantite, Temps, Majoration, "
+                    "LibTaille) VALUES (:d, :s, :l, :e, :of, 1, 0, 1, 20, 1, 'M')"
+                ),
+                {"d": REF_DATE.isoformat(), "s": f"{REF_DATE.isoformat()} 08:{k:02d}:00",
+                 "l": ID_LIGNE_CH1_L2, "e": ID_EMP_MIXTE, "of": ID_OF_91294_1},
+            )
+    du = date(2026, 8, 27)
+    r = {x.operateur.id: x for x in classement_operateurs(du, REF_DATE)}[ID_EMP_MIXTE]
+    assert r.minutes_produites == pytest.approx(200)
+    assert r.minutes_presence == 480  # un seul jour avec scan confection
+    assert r.rendement == pytest.approx(200 / 480)
+    assert r.pieces_operations == 15
+    assert r.ligne == "CH1-L2"  # ligne principale = plus de scans, inchangée
+
+    f = fiche_operateur(ID_EMP_MIXTE, du, REF_DATE)
+    assert f.par_jour == [(du, None), (REF_DATE, pytest.approx(200 / 480))]
+    assert f.total.rendement == pytest.approx(200 / 480)
+    assert sum(q for _, q in f.operations) == 15
+
+
+def test_fiche_tricotage_seul(divatex):
+    _scans_tricot(divatex, ID_EMP_TRICOT, REF_DATE.isoformat(), 4)
+    f = fiche_operateur(ID_EMP_TRICOT, REF_DATE, REF_DATE)
+    assert f.par_jour == [(REF_DATE, None)]
+    assert f.total.rendement is None and f.total.minutes_produites == 0
+    assert f.total.pieces_operations == 4
