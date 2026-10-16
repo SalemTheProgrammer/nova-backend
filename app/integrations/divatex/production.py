@@ -184,19 +184,48 @@ def production_lignes(jour: date, groupe_id: int | None = None) -> list[Producti
 
 
 def tendance(au: date, jours: int = 7, groupe_id: int | None = None) -> list[PointJour]:
+    """Sortie et objectif de la confection par jour : deux requêtes pour toute la période."""
+    du = au - timedelta(days=jours - 1)
+    confection = [
+        l for l in lister_lignes()
+        if l.nature == "confection"
+        and (groupe_id is None or (l.groupe is not None and l.groupe.id == groupe_id))
+    ]
+
+    totaux: dict[tuple[date, int, int], int] = defaultdict(int)
+    for r in requete(
+        "SELECT Date, IDChaineMontage, IdPhase, SUM(Quantite) AS pieces FROM lectures "
+        "WHERE Date BETWEEN :du AND :au AND IdPhase > 0 "
+        "GROUP BY Date, IDChaineMontage, IdPhase",
+        du=du.isoformat(), au=au.isoformat(),
+    ):
+        totaux[(_en_date(r["Date"]), int(r["IDChaineMontage"]), int(r["IdPhase"]))] += int(
+            r["pieces"] or 0
+        )
+
+    historique: dict[int, list[tuple[date, int, int | None]]] = defaultdict(list)
+    for r in requete(
+        "SELECT IDChaineMontage, Date, IDPhaseSortie, ObjectifSortie FROM objectifchaine "
+        "WHERE Date <= :au ORDER BY Date, IDObjectifChaine",
+        au=au.isoformat(),
+    ):
+        phase = int(r["IDPhaseSortie"]) if r["IDPhaseSortie"] else _PHASE_CONFECTION
+        obj = int(r["ObjectifSortie"]) if r["ObjectifSortie"] is not None else None
+        historique[int(r["IDChaineMontage"])].append((_en_date(r["Date"]), phase, obj))
+
     points = []
     for i in range(jours - 1, -1, -1):
         jour = au - timedelta(days=i)
-        confection = [
-            l for l in production_lignes(jour, groupe_id) if l.ligne.nature == "confection"
-        ]
-        points.append(
-            PointJour(
-                jour=jour,
-                sortie=sum(l.sortie for l in confection),
-                objectif=sum(l.objectif or 0 for l in confection),
-            )
-        )
+        sortie = objectif = 0
+        for ligne in confection:
+            phase, obj = _phase_par_defaut(ligne), None
+            for date_obj, ph, ob in historique.get(ligne.id, ()):
+                if date_obj > jour:
+                    break
+                phase, obj = ph, ob
+            sortie += totaux.get((jour, ligne.id, phase), 0)
+            objectif += obj or 0
+        points.append(PointJour(jour=jour, sortie=sortie, objectif=objectif))
     return points
 
 

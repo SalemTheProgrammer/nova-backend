@@ -64,6 +64,13 @@ def test_tendance(divatex):
     assert points[-1].objectif == 120 + 382
 
 
+def test_tendance_au_plus_trois_requetes(divatex, capture_sql):
+    tendance(JOUR, jours=7)
+    capture_sql.clear()
+    tendance(JOUR, jours=7)
+    assert len(capture_sql) <= 3
+
+
 def test_situation_atelier(divatex):
     s = situation_atelier(JOUR)
     assert (s.sortie, s.objectif, s.a_des_lectures, s.nb_of_en_retard) == (30, 502, True, 2)
