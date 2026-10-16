@@ -62,19 +62,31 @@ _SELECT_OF = (
 )
 
 
+_TAILLE_LOT_OF = 100
+
+
 def _totaux_phase_finale(of_ids: list[int]) -> dict[int, int]:
-    """Quantité passée en phase finale par OF ; filtre d'abord sur IDOFabrication."""
-    if not of_ids:
-        return {}
-    marques = ", ".join(f":o{i}" for i in range(len(of_ids)))
-    params = {f"o{i}": of_id for i, of_id in enumerate(of_ids)}
-    lignes = requete(
-        f"SELECT IDOFabrication, SUM(Quantite) AS total FROM lectures "
-        f"WHERE IDOFabrication IN ({marques}) AND IdPhase = :phase_finale "
-        "GROUP BY IDOFabrication",
-        phase_finale=get_settings().divatex_phase_finale, **params,
-    )
-    return {int(r["IDOFabrication"]): int(r["total"] or 0) for r in lignes}
+    """Quantité passée en phase finale par OF ; filtre d'abord sur IDOFabrication.
+
+    Les identifiants sont traités par lots (une grosse liste IN ralentit fortement
+    la base à froid) ; les totaux sont fusionnés ici.
+    """
+    totaux: dict[int, int] = {}
+    phase = get_settings().divatex_phase_finale
+    for debut in range(0, len(of_ids), _TAILLE_LOT_OF):
+        lot = of_ids[debut:debut + _TAILLE_LOT_OF]
+        marques = ", ".join(f":o{i}" for i in range(len(lot)))
+        params = {f"o{i}": of_id for i, of_id in enumerate(lot)}
+        lignes = requete(
+            f"SELECT IDOFabrication, SUM(Quantite) AS total FROM lectures "
+            f"WHERE IDOFabrication IN ({marques}) AND IdPhase = :phase_finale "
+            "GROUP BY IDOFabrication",
+            phase_finale=phase, **params,
+        )
+        for r in lignes:
+            of_id = int(r["IDOFabrication"])
+            totaux[of_id] = totaux.get(of_id, 0) + int(r["total"] or 0)
+    return totaux
 
 
 def charger_resumes(

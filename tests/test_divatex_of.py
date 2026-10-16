@@ -84,3 +84,16 @@ def test_avancement_of_sans_lecture(divatex):
 
 def test_avancement_of_inconnu(divatex):
     assert avancement_of(999999) is None
+
+
+def test_totaux_phase_finale_par_lots_de_100(divatex, capture_sql):
+    from app.integrations.divatex.of import _totaux_phase_finale
+
+    # 250 ids : l'OF 1 est dans le 1er lot, l'OF 2 dans le 3e
+    ids = [ID_OF_91294_1] + list(range(10_000, 10_248)) + [ID_OF_91294_2]
+    capture_sql.clear()
+    totaux = _totaux_phase_finale(ids)
+    lots = [q for q in capture_sql if "FROM lectures" in q and "IDOFabrication IN" in q]
+    assert len(lots) == 3
+    assert totaux == {ID_OF_91294_1: 100, ID_OF_91294_2: 50}
+    assert _totaux_phase_finale([]) == {}
