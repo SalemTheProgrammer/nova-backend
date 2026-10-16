@@ -61,7 +61,7 @@ def test_tendance(divatex):
     assert [p.jour for p in points] == [date(2026, 8, 26), date(2026, 8, 27), date(2026, 8, 28)]
     assert points[-1].sortie == 30
     assert points[1].sortie == 1
-    assert points[-1].objectif == 120 + 382
+    assert points[-1].objectif == 382  # CH1-L1 : objectif mais aucune lecture
 
 
 def test_tendance_au_plus_trois_requetes(divatex, capture_sql):
@@ -73,8 +73,9 @@ def test_tendance_au_plus_trois_requetes(divatex, capture_sql):
 
 def test_situation_atelier(divatex):
     s = situation_atelier(JOUR)
-    assert (s.sortie, s.objectif, s.a_des_lectures, s.nb_of_en_retard) == (30, 502, True, 2)
-    assert s.sortie_avec_objectif == 30
+    assert (s.sortie, s.objectif, s.a_des_lectures, s.nb_of_en_retard) == (30, 382, True, 2)
+    assert abs(s.taux - s.sortie_avec_objectif / s.objectif) < 1e-9
+    assert s.sortie_avec_objectif == 30 and s.objectif == 382
     assert s.taux == pytest.approx(30 / 382)  # CH1-L1 : objectif mais aucune lecture
     assert s.lignes_sous_objectif == ["CH1-L2"]  # CH1-L1 sans lecture : ni sous ni au-dessus
     assert s.lignes_au_dessus == []
@@ -88,6 +89,7 @@ def test_taux_atelier_ignore_chaine_sans_objectif(divatex):
     from tests.divatex_fixtures import ID_GROUPE_CHAINE01
 
     avant = situation_atelier(JOUR)
+    tendance_avant = tendance(JOUR, jours=3)[-1]
     with divatex.begin() as conn:
         conn.execute(text(
             "INSERT INTO chainemontage (IDChaineMontage, Code, ChaineMontage, Etat, IDGroupe) "
@@ -99,6 +101,10 @@ def test_taux_atelier_ignore_chaine_sans_objectif(divatex):
                 "VALUES (:d, 99, 0, 0, 0, 5, 1, 0, 0, 'M')"), {"d": JOUR.isoformat()})
     vider_caches()
     apres = situation_atelier(JOUR)
+    assert apres.objectif == avant.objectif
+    pt_avant = tendance_avant
+    pt_apres = tendance(JOUR, jours=3)[-1]
+    assert (pt_apres.sortie, pt_apres.objectif) == (pt_avant.sortie, pt_avant.objectif)
     assert apres.sortie == avant.sortie + 10
     assert apres.sortie_avec_objectif == avant.sortie_avec_objectif
     assert apres.taux == pytest.approx(avant.taux)

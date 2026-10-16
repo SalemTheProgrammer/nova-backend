@@ -170,7 +170,7 @@ def rechercher_operateurs(texte: str, limite: int = 10) -> list[Operateur]:
     if not texte:
         return []
     # DIVA stocke le matricule en entier : lier un entier quand le texte est numérique
-    matricule = int(texte) if texte.isascii() and texte.isdigit() else texte
+    matricule = int(texte) if texte.isascii() and texte.isdigit() and len(texte) <= 10 else texte
     exact = requete(
         f"SELECT {_COLONNES_EMPLOYE} FROM employe WHERE Matricule = :m "
         "ORDER BY Nom, Prenom LIMIT :limite",

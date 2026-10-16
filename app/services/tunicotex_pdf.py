@@ -166,12 +166,11 @@ def _r1(p: ParametresRapport) -> tuple[str, bytes]:
             for l in lignes
         ]
         confection = [l for l in lignes if l.ligne.nature == "confection"]
-        sortie = sum(l.sortie for l in confection)
-        objectif = sum(l.objectif or 0 for l in confection)
+        # même périmètre que le taux : chaînes avec objectif et lectures
         comparables = [l for l in confection if l.objectif is not None and l.a_des_lectures]
-        taux_total = kpi.taux_atteinte(
-            sum(l.sortie for l in comparables), sum(l.objectif for l in comparables)
-        )
+        sortie = sum(l.sortie for l in comparables)
+        objectif = sum(l.objectif for l in comparables)
+        taux_total = kpi.taux_atteinte(sortie, objectif)
         total_rendement = kpi.rendement(
             sum(l.minutes_produites for l in confection),
             sum(l.minutes_presence for l in confection),

@@ -194,15 +194,18 @@ def tendance(au: date, jours: int = 7, groupe_id: int | None = None) -> list[Poi
     ]
 
     totaux: dict[tuple[date, int, int], int] = defaultdict(int)
+    avec_lectures: set[tuple[date, int]] = set()  # (jour, ligne) ayant des sorties de phase
     for r in requete(
         "SELECT Date, IDChaineMontage, IdPhase, SUM(Quantite) AS pieces FROM lectures "
         "WHERE Date BETWEEN :du AND :au AND IdPhase > 0 "
         "GROUP BY Date, IDChaineMontage, IdPhase",
         du=du.isoformat(), au=au.isoformat(),
     ):
-        totaux[(_en_date(r["Date"]), int(r["IDChaineMontage"]), int(r["IdPhase"]))] += int(
-            r["pieces"] or 0
-        )
+        jour_lu = _en_date(r["Date"])
+        if jour_lu is None:
+            continue
+        totaux[(jour_lu, int(r["IDChaineMontage"]), int(r["IdPhase"]))] += int(r["pieces"] or 0)
+        avec_lectures.add((jour_lu, int(r["IDChaineMontage"])))
 
     historique: dict[int, list[tuple[date, int, int | None]]] = defaultdict(list)
     for r in requete(
@@ -219,13 +222,17 @@ def tendance(au: date, jours: int = 7, groupe_id: int | None = None) -> list[Poi
         jour = au - timedelta(days=i)
         sortie = objectif = 0
         for ligne in confection:
+            if (jour, ligne.id) not in avec_lectures:
+                continue
             phase, obj = _phase_par_defaut(ligne), None
             for date_obj, ph, ob in historique.get(ligne.id, ()):
                 if date_obj > jour:
                     break
                 phase, obj = ph, ob
+            if obj is None:  # sans objectif : exclue du ratio sortie / objectif
+                continue
             sortie += totaux.get((jour, ligne.id, phase), 0)
-            objectif += obj or 0
+            objectif += obj
         points.append(PointJour(jour=jour, sortie=sortie, objectif=objectif))
     return points
 
@@ -251,19 +258,18 @@ def courbe_horaire(ligne_id: int, jour: date) -> list[PointHeure]:
 def situation_atelier(jour: date) -> SituationAtelier:
     confection = [l for l in production_lignes(jour) if l.ligne.nature == "confection"]
     sortie = sum(l.sortie for l in confection)
-    objectif = sum(l.objectif or 0 for l in confection)
     a_lectures = any(l.a_des_lectures for l in confection)
     avec_taux = [l for l in confection if l.taux is not None]
     # le taux ne compare que les chaînes ayant un objectif (et des lectures)
     comparables = [l for l in confection if l.objectif is not None and l.a_des_lectures]
     sortie_avec_objectif = sum(l.sortie for l in comparables)
-    objectif_compare = sum(l.objectif for l in comparables)
+    objectif = sum(l.objectif for l in comparables)
     return SituationAtelier(
         jour=jour,
         sortie=sortie,
         sortie_avec_objectif=sortie_avec_objectif,
         objectif=objectif,
-        taux=kpi.taux_atteinte(sortie_avec_objectif, objectif_compare) if a_lectures else None,
+        taux=kpi.taux_atteinte(sortie_avec_objectif, objectif) if a_lectures else None,
         rendement_moyen=kpi.rendement(
             sum(l.minutes_produites for l in confection),
             sum(l.minutes_presence for l in confection),
