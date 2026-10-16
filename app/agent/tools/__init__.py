@@ -7,11 +7,13 @@ from app.agent.tools.documents import lister_documents_disponibles, rechercher_d
 from app.agent.tools.navigation import NAVIGATION_TOOLS
 from app.agent.tools.notify import NOTIFY_TOOLS
 from app.agent.tools.scheduling import SCHEDULING_TOOLS
+from app.agent.tools.tunicotex import TUNICOTEX_TOOLS
 
 DOCUMENT_TOOLS: list[BaseTool] = [rechercher_documents, lister_documents_disponibles]
 
 ALL_TOOLS: list[BaseTool] = [
     *DOCUMENT_TOOLS,
+    *TUNICOTEX_TOOLS,
     *NOTIFY_TOOLS,
     *SCHEDULING_TOOLS,
     *NAVIGATION_TOOLS,
@@ -21,6 +23,7 @@ ALL_TOOLS: list[BaseTool] = [
 # d'administration : cocher, groupe par groupe, les outils autorisés par numéro.
 _GROUPES: list[tuple[str, list[BaseTool]]] = [
     ("Documents", DOCUMENT_TOOLS),
+    ("Atelier Tunicotex", TUNICOTEX_TOOLS),
     ("Notifications", NOTIFY_TOOLS),
     ("Planification d'envois", SCHEDULING_TOOLS),
     ("Navigation", NAVIGATION_TOOLS),
@@ -57,6 +60,7 @@ __all__ = [
     "READONLY_TOOL_NAMES",
     "rechercher_documents",
     "lister_documents_disponibles",
+    "TUNICOTEX_TOOLS",
     "NOTIFY_TOOLS",
     "SCHEDULING_TOOLS",
     "NAVIGATION_TOOLS",

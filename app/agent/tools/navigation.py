@@ -10,6 +10,12 @@ from __future__ import annotations
 from langchain_core.tools import tool
 
 PAGES: dict[str, str] = {
+    "atelier": "Tableau de bord",
+    "chaines": "Chaînes",
+    "of": "Ordres de fabrication",
+    "operateurs": "Opérateurs",
+    "commandes": "Commandes & livraisons",
+    "rapports": "Rapports",
     "documents": "Documents",
 }
 
@@ -18,7 +24,8 @@ PAGES: dict[str, str] = {
 def aller_a_la_page(page: str, raison: str | None = None) -> tuple[str, dict | None]:
     """Redirige l'interface vers la page correspondant à la question de l'opérateur.
 
-    `page` doit être exactement l'une de : documents.
+    `page` doit être exactement l'une de : atelier, chaines, of, operateurs, commandes, rapports,
+    documents.
 
     À appeler dès que la réponse concerne un domaine ayant une page dédiée, pour
     que l'opérateur voie l'information en contexte pendant que tu réponds. Ne
@@ -43,4 +50,14 @@ NAVIGATION_TOOLS = [aller_a_la_page]
 # pour émettre automatiquement une navigation après l'appel réel de l'outil,
 # sans dépendre de la décision du LLM. `aller_a_la_page` reste disponible pour
 # les cas explicites (« ouvre-moi la page stock ») qu'aucun autre outil ne couvre.
-TOOL_PAGE_MAP: dict[str, str] = {}
+TOOL_PAGE_MAP: dict[str, str] = {
+    "situation_atelier": "atelier",
+    "production_chaines": "atelier",
+    "detail_chaine": "chaines",
+    "rechercher_of": "of",
+    "avancement_of": "of",
+    "rendement_operateurs": "operateurs",
+    "fiche_operateur": "operateurs",
+    "commandes_a_risque": "commandes",
+    "consulter_commande": "commandes",
+}
