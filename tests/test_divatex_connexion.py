@@ -11,6 +11,7 @@ from sqlalchemy.pool import StaticPool
 from app.core.config import get_settings
 from app.integrations.divatex.connexion import (
     DivatexIndisponible,
+    _est_mysql,
     cache,
     date_reference,
     get_engine,
@@ -82,6 +83,26 @@ def test_connexion_erreur_traduite():
     assert exc.value.status_code == 503
     assert exc.value.code == "divatex_indisponible"
     assert exc.value.message == "Base DIVA injoignable."
+
+
+def test_garde_lecture_seule_mysql_et_mariadb():
+    assert _est_mysql("mysql") is True
+    assert _est_mysql("mariadb") is True
+    assert _est_mysql("sqlite") is False
+
+
+def test_erreur_requete_non_traduite(engine_fixture):
+    from sqlalchemy.exc import SQLAlchemyError
+
+    with pytest.raises(SQLAlchemyError) as exc:
+        requete("SELECT nope FROM lectures")
+    assert not isinstance(exc.value, DivatexIndisponible)
+
+
+def test_fichier_inaccessible_indisponible(tmp_path):
+    set_engine(create_engine(f"sqlite:///{tmp_path}/absent/x.db"))
+    with pytest.raises(DivatexIndisponible):
+        requete("SELECT 1")
 
 
 def test_url_vide_indisponible():

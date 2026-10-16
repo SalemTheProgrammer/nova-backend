@@ -40,16 +40,37 @@ class DivatexIndisponible(AppError):
         super().__init__(message, details=details)
 
 
+_CODES_INDISPONIBLE = {2003, 2006, 2013, 1969}
+
+
+def _est_mysql(nom: str) -> bool:
+    """Vrai pour le dialecte MySQL ou MariaDB (nom de dialecte ou schéma d'URL)."""
+    return nom.lower().startswith(("mysql", "mariadb"))
+
+
+def _est_indisponibilite(exc: Exception) -> bool:
+    """Seules les pannes de connectivité / délais sont traduites ; le reste remonte."""
+    if isinstance(exc, (InterfaceError, TimeoutError)):
+        return True
+    if isinstance(exc, OperationalError):
+        orig = exc.orig
+        if type(orig).__module__.startswith("pymysql"):
+            code = orig.args[0] if orig.args else None
+            return code in _CODES_INDISPONIBLE
+        return "unable to open" in str(orig).lower()
+    return False
+
+
 def _creer_engine(url: str) -> Engine:
     settings = get_settings()
     options: dict[str, Any] = {"pool_pre_ping": True, "pool_recycle": 1800}
-    if url.startswith("mysql"):
+    if _est_mysql(url):
         options.update(pool_size=5, max_overflow=5, connect_args={"connect_timeout": 5})
     engine = create_engine(url, **options)
 
     @event.listens_for(engine, "connect")
     def _lecture_seule(dbapi_conn, _record) -> None:  # pragma: no cover - MariaDB réel
-        if engine.dialect.name != "mysql":
+        if not _est_mysql(engine.dialect.name):
             return
         timeout = int(settings.divatex_statement_timeout_s)
         cur = dbapi_conn.cursor()
@@ -88,8 +109,10 @@ def connexion() -> Iterator[Connection]:
     try:
         with get_engine().connect() as conn:
             yield conn
-    except (OperationalError, InterfaceError) as exc:
-        logger.warning("divatex_indisponible", erreur=type(exc).__name__)
+    except (OperationalError, InterfaceError, TimeoutError) as exc:
+        if not _est_indisponibilite(exc):
+            raise
+        logger.warning("divatex_indisponible", erreur=str(getattr(exc, "orig", exc)))
         raise DivatexIndisponible() from exc
 
 
