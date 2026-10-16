@@ -26,6 +26,7 @@ dependencies = [
     "python-multipart>=0.0.9",
     "reportlab>=4.0.0",
     "matplotlib>=3.9.0",
+    "pymysql>=1.1",
 ]
 
 [project.optional-dependencies]
@@ -47,6 +48,11 @@ select = ["E", "F", "I", "B", "UP", "ASYNC"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+addopts = "-m 'not mariadb and not divatex'"
+markers = [
+    "mariadb: nécessite une base MariaDB vide (NOVA_TEST_MARIADB_URL)",
+    "divatex: nécessite l'accès lecture seule à la base divatex",
+]
 
 [tool.mypy]
 python_version = "3.11"

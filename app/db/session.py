@@ -1,6 +1,7 @@
 """Database engine, session factory, and FastAPI dependency."""
 from __future__ import annotations
 
+import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
 
@@ -15,22 +16,30 @@ logger = get_logger(__name__)
 
 settings = get_settings()
 
-# `check_same_thread=False` is required for SQLite under FastAPI's threadpool.
-_connect_args = (
-    {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-)
+_est_sqlite = settings.database_url.startswith("sqlite")
 
-engine = create_engine(
-    settings.database_url,
-    connect_args=_connect_args,
-    # SQLite connections are cheap (file handles) : un pool large absorbe les
-    # rafales du dashboard sans TimeoutError — l'incident prod du 18/07 a montré
-    # que 5+10 connexions saturaient en quelques minutes de trafic soutenu.
-    pool_size=20,
-    max_overflow=30,
-    pool_timeout=10,
-    future=True,
-)
+if _est_sqlite:
+    # `check_same_thread=False` est requis pour SQLite sous le threadpool de FastAPI.
+    # Les connexions SQLite sont bon marché (descripteurs de fichier) : un pool large
+    # absorbe les rafales du dashboard sans TimeoutError.
+    engine = create_engine(
+        settings.database_url,
+        connect_args={"check_same_thread": False},
+        pool_size=20,
+        max_overflow=30,
+        pool_timeout=10,
+        future=True,
+    )
+else:
+    # MariaDB/MySQL : pre_ping + recyclage évitent les connexions coupées par le serveur.
+    engine = create_engine(
+        settings.database_url,
+        pool_pre_ping=True,
+        pool_recycle=3600,
+        pool_size=10,
+        max_overflow=10,
+        future=True,
+    )
 
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False, future=True)
 
@@ -43,7 +52,9 @@ def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: AN
     une tâche de fond écrit) ; busy_timeout fait patienter au lieu de lever
     « database is locked » quand deux écritures se croisent.
     """
-    if settings.database_url.startswith("sqlite"):
+    # Écouteur global sur Engine : ne viser que les connexions SQLite (le test MariaDB
+    # crée son propre engine dans le même processus).
+    if isinstance(dbapi_connection, sqlite3.Connection):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.execute("PRAGMA journal_mode=WAL")
@@ -84,4 +95,4 @@ def init_db() -> None:
     from app.db.base import Base
 
     Base.metadata.create_all(bind=engine)
-    logger.info("db_initialized", url=settings.database_url)
+    logger.info("db_initialized", url=settings.database_url_masquee)

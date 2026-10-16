@@ -51,7 +51,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.agent.graph import init_graph
     from app.core.paths import chat_history_db_path
 
-    checkpointer_cm = AsyncSqliteSaver.from_conn_string(chat_history_db_path())
+    from pathlib import Path
+
+    historique = chat_history_db_path()
+    Path(historique).parent.mkdir(parents=True, exist_ok=True)
+    checkpointer_cm = AsyncSqliteSaver.from_conn_string(historique)
     checkpointer = await checkpointer_cm.__aenter__()
     init_graph(checkpointer)
 

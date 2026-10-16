@@ -6,6 +6,8 @@ from typing import Annotated, Literal
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 
 class Settings(BaseSettings):
@@ -28,6 +30,9 @@ class Settings(BaseSettings):
 
     # Database
     database_url: str = "sqlite:///./nova.db"
+    # Historique des conversations (checkpointer SQLite) : vide = à côté de la
+    # base SQLite, sinon ./data/nova_chat_history.db (voir core/paths.py).
+    chat_history_db_path: str = ""
 
     # Security
     # NoDecode: keep the raw env string so `_split_csv` parses the CSV
@@ -111,6 +116,14 @@ class Settings(BaseSettings):
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value
+
+    @property
+    def database_url_masquee(self) -> str:
+        """URL de la base sans mot de passe, sûre à journaliser."""
+        try:
+            return make_url(self.database_url).render_as_string(hide_password=True)
+        except ArgumentError:
+            return "***"
 
     @property
     def is_production(self) -> bool:

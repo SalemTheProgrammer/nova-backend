@@ -14,7 +14,9 @@ def chat_history_db_path() -> str:
     `database_url` doesn't silently wipe chat threads too.
     """
     settings = get_settings()
+    if settings.chat_history_db_path:
+        return settings.chat_history_db_path
     if settings.database_url.startswith("sqlite"):
         app_db = Path(settings.database_url.split("sqlite:///", 1)[-1])
         return str(app_db.with_name("nova_chat_history.db"))
-    return "./nova_chat_history.db"
+    return "./data/nova_chat_history.db"
