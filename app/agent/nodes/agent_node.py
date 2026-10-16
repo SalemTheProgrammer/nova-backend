@@ -63,9 +63,8 @@ def _addendum_perimetre(autorises: list[str], bloques: list[str]) -> str:
         "du catalogue décrit plus haut sont INDISPONIBLES ici : ignore leurs "
         "consignes associées — en particulier, sans appel d'outil réussi dans CE "
         "tour, RIEN ne s'affiche nulle part (aucun catalogue, tableau ou page). "
-        "Pour toute demande hors de ce périmètre (articles, ordres de "
-        "fabrication, machines, stock, TRS, arrêts, maintenance, graphiques, "
-        "envois…), ne réponds RIEN sur le fond, n'invente ni donnée ni "
+        "Pour toute demande hors de ce périmètre (production, chaînes, OF, "
+        "rendement, documents, envois…), ne réponds RIEN sur le fond, n'invente ni donnée ni "
         "affichage, et réponds uniquement avec cette phrase exacte : "
         f"« {REFUS_OUTIL} »\n"
     )
@@ -121,7 +120,7 @@ def call_model(state: AgentState, config: RunnableConfig | None = None) -> dict:
     # Le message d'accueil ouvre le thread AVANT tout message opérateur : le trim
     # (`start_on="human"`) l'écarte donc toujours. On le remet en tête tant que la
     # conversation est courte, pour que Nova sache ce qu'elle a dit si
-    # l'opérateur y répond (« ok, règle M-03 »).
+    # l'opérateur y répond (« ok, et la chaîne 3 ? »).
     premier = state["messages"][0] if state["messages"] else None
     if (
         premier is not None

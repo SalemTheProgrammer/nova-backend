@@ -113,7 +113,7 @@ def rendre_graphique_png(spec: dict) -> bytes:
 
 
 def _couleur_jauge(pct: float) -> str:
-    """Rouge < 50 %, orange < 74 %, vert au-delà (repères TRS usuels)."""
+    """Rouge < 50 %, orange < 74 %, vert au-delà (repères de rendement usuels)."""
     if pct < 50:
         return "#ef4444"
     if pct < 74:

@@ -61,44 +61,6 @@ class Settings(BaseSettings):
     # Vision (analyse des photos envoyées à Nova sur WhatsApp)
     vision_model: str = "gpt-4o-mini"
 
-    # MQTT / Sparkplug B : télémétrie des automates et commandes machine.
-    # Nova est l'hôte Sparkplug (« Primary Host ») du groupe `sparkplug_group_id`.
-    mqtt_enabled: bool = True
-    mqtt_host: str = "localhost"
-    mqtt_port: int = 1883
-    mqtt_username: str = ""
-    mqtt_password: str = ""
-    mqtt_tls: bool = False
-    mqtt_tls_ca_file: str = ""  # vide = autorités de certification du système
-    mqtt_client_id: str = "nova-mes"
-    mqtt_keepalive_s: int = 30
-    sparkplug_group_id: str = "NovaPlant"
-    sparkplug_host_id: str = "nova-mes"
-    # Délai minimal entre deux demandes de re-naissance au même edge node.
-    sparkplug_rebirth_min_interval_s: float = 10.0
-    # Attente maximale de l'accusé d'un automate après une commande (DCMD).
-    machine_command_timeout_s: float = 5.0
-
-    # Superviseur autonome
-    supervisor_enabled: bool = True
-    # Autonomie du superviseur : "manuel" (comportement historique, tout attend
-    # l'opérateur), "assiste" (risque FAIBLE exécuté seul, immédiatement),
-    # "autopilote" (idem + risque MOYEN exécuté seul après un délai, sauf rejet
-    # explicite avant l'échéance). Modifiable en runtime via
-    # POST /api/v1/agent/autonomie (voir supervisor_service.definir_mode_autonomie) —
-    # ce réglage n'est que la valeur de démarrage.
-    autonomy_mode_defaut: Literal["manuel", "assiste", "autopilote"] = "manuel"
-    # Délai (secondes) avant l'exécution automatique d'une proposition à risque
-    # MOYEN en mode "autopilote" — le temps pour l'opérateur de dire non.
-    autopilote_delai_moyen_s: int = 45
-    # Nova proactive : les propositions du superviseur partent aussi par WhatsApp
-    # vers ces numéros (CSV) ; l'opérateur répond oui/non depuis son téléphone.
-    supervisor_notify_numbers: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    # False par défaut : toutes les propositions (dérive qualité, stock bas,
-    # retard prévisionnel…) partent sur WhatsApp, pas seulement les CRITICAL —
-    # c'est le comportement décrit dans NOVA-AI.md et attendu en démo.
-    supervisor_notify_critical_only: bool = False
-
     # Notifications sortantes (envoi du bilan / messages par Nova)
     # E-mail : n'importe quel SMTP (Gmail : smtp.gmail.com + mot de passe d'application).
     smtp_host: str = ""
@@ -117,7 +79,7 @@ class Settings(BaseSettings):
 
     # Bilan automatique (envoi périodique sans opérateur) : désactivé par défaut,
     # l'activation en config tient lieu d'accord préalable (pas de confirmation
-    # au moment de l'envoi, contrairement à `envoyer_rapport` en conversation).
+    # au moment de l'envoi, contrairement aux envois en conversation).
     auto_bilan_enabled: bool = False
     auto_bilan_canal: Literal["email", "whatsapp"] = "email"
     auto_bilan_destinataire: str = ""
@@ -142,20 +104,12 @@ class Settings(BaseSettings):
         "cors_origins",
         "api_keys",
         "whatsapp_allowed_numbers",
-        "supervisor_notify_numbers",
         mode="before",
     )
     @classmethod
     def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
-        return value
-
-    @field_validator("sparkplug_group_id", "sparkplug_host_id", "mqtt_client_id")
-    @classmethod
-    def _identifiant_mqtt(cls, value: str) -> str:
-        if not value or any(c in "/+#" for c in value):
-            raise ValueError("identifiant MQTT/Sparkplug vide ou contenant / + #")
         return value
 
     @property

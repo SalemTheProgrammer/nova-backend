@@ -2,7 +2,7 @@
 
 Le PDF téléversé est conservé sur disque ({documents_pdf_dir}/{id}.pdf, voir la
 route d'upload). Ce module le retrouve par nom approximatif — « le manuel de la
-blistereuse », « la norme BPF » — pour que l'agent puisse l'ENVOYER tel quel
+machine à coudre », « la procédure de coupe » — pour que l'agent puisse l'ENVOYER tel quel
 (WhatsApp/e-mail), pas seulement le citer via le RAG.
 """
 from __future__ import annotations
@@ -40,8 +40,8 @@ def _normaliser(texte: str) -> str:
 def trouver_document(db: Session, nom_ou_id: str) -> DocumentRag | None:
     """Retrouve un document par id, nom exact, sous-chaîne ou similarité.
 
-    Tolère les à-peu-près de conversation (« manuel blistereuse » ↔
-    « Manuel machine — Blistereuse B400 »). Renvoie None si rien d'assez proche.
+    Tolère les à-peu-près de conversation (« manuel piqueuse » ↔
+    « Manuel machine — Piqueuse plate »). Renvoie None si rien d'assez proche.
     """
     brut = (nom_ou_id or "").strip()
     if not brut:

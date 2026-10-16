@@ -1,6 +1,7 @@
 """FastAPI application factory and entrypoint."""
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -54,19 +55,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     checkpointer = await checkpointer_cm.__aenter__()
     init_graph(checkpointer)
 
-    # Enregistre la boucle serveur pour les broadcasts depuis les threads
-    # (outils agent, superviseur, simulation auto).
-    import asyncio
-
-    from app.services.websocket_manager import manager
-
-    manager.set_loop(asyncio.get_running_loop())
-
     background_tasks: list[asyncio.Task] = []
-    if settings.supervisor_enabled:
-        from app.services.supervisor_service import boucle_superviseur
-
-        background_tasks.append(asyncio.create_task(boucle_superviseur()))
     if settings.auto_bilan_enabled:
         from app.services.scheduled_report_service import boucle_bilan_auto
 
@@ -76,22 +65,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     background_tasks.append(asyncio.create_task(boucle_envois_planifies()))
 
-    # Hôte Sparkplug B : télémétrie des automates + commandes machine (MQTT).
-    from app.protocols.sparkplug_b import runtime
-
-    sparkplug_host = None
-    if settings.mqtt_enabled:
-        from app.protocols.sparkplug_b.host import SparkplugHost
-
-        sparkplug_host = SparkplugHost(settings)
-        runtime.set_host(sparkplug_host)
-        sparkplug_host.start()
-
     yield
 
-    if sparkplug_host is not None:
-        runtime.set_host(None)
-        await asyncio.to_thread(sparkplug_host.stop)
     for task in background_tasks:
         task.cancel()
     await checkpointer_cm.__aexit__(None, None, None)
@@ -140,10 +115,6 @@ def create_app() -> FastAPI:
 
     register_exception_handlers(app)
     app.include_router(api_router, prefix=settings.api_prefix)
-
-    from app.websockets.dashboard_ws import register_websocket_routes
-
-    register_websocket_routes(app)
 
     return app
 

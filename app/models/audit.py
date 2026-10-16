@@ -1,4 +1,4 @@
-"""Journal d'audit des actions sur l'atelier (esprit BPF / Annexe 11).
+"""Journal d'audit des actions sur l'atelier (traçabilité des actions).
 
 Chaque action IRRÉVERSIBLE ou SORTANTE qui s'exécute réellement laisse une
 trace attribuée : quel outil, quels arguments, depuis quel canal, décidée par
@@ -25,8 +25,7 @@ class AuditLog(Base):
     # Ce qui a été exécuté.
     action: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     arguments: Mapped[dict | None] = mapped_column(JSON, nullable=True)
-    # D'où vient la décision : "agent" (outil confirmé en conversation) ou
-    # "superviseur" (proposition approuvée).
+    # D'où vient la décision : "agent" (outil confirmé en conversation).
     source: Mapped[str] = mapped_column(String(30), nullable=False)
     # Canal de la décision : "web", "whatsapp", "voix"…
     canal: Mapped[str] = mapped_column(String(30), nullable=False)

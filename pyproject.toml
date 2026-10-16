@@ -1,7 +1,7 @@
 [project]
 name = "nova-agent-backend"
 version = "0.1.0"
-description = "Nova — MES agentique (FastAPI + LangGraph) avec hôte Sparkplug B / MQTT"
+description = "Nova — assistant agentique de l'atelier Tunicotex (FastAPI + LangGraph)"
 requires-python = ">=3.11"
 # Garder synchronisé avec requirements.txt (utilisé par le Dockerfile).
 dependencies = [
@@ -26,8 +26,6 @@ dependencies = [
     "python-multipart>=0.0.9",
     "reportlab>=4.0.0",
     "matplotlib>=3.9.0",
-    "paho-mqtt>=2.1,<3",
-    "protobuf>=7.35,<8",
 ]
 
 [project.optional-dependencies]

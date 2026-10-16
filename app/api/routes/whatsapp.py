@@ -7,8 +7,6 @@ Chaque numéro a son propre `thread_id` : la mémoire de conversation (et donc
 les confirmations « oui » avant une action) fonctionne comme dans le chat web.
 
 Cas particuliers gérés avant l'agent :
-- « oui »/« non » en réponse à une proposition proactive du superviseur
-  (voir `proactive_service`) → décision directe, sans passer par le LLM.
 - Message vocal → transcription STT, et la réponse repart AUSSI en vocal (TTS).
 - Photo → analyse par le modèle vision, injectée dans le message pour l'agent.
 """
@@ -33,7 +31,7 @@ from app.core.logging import get_logger
 from app.core.security import require_api_key
 from app.db.session import session_scope
 from app.models.utilisateur import Utilisateur
-from app.services import auth_service, chart_image_service, proactive_service
+from app.services import auth_service, chart_image_service
 from app.services.notify_service import WHATSAPP_MAX_CHARS, normaliser_numero
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"], dependencies=[Depends(require_api_key)])
@@ -158,12 +156,11 @@ def _nettoyer_texte_entrant(texte: str, e164: str) -> str:
 
 
 VISION_PROMPT = (
-    "Tu es l'inspecteur qualité d'une usine pharmaceutique (BPF/GMP). Décris ce "
-    "que montre cette photo prise sur la ligne de production (produit, blisters, "
-    "comprimés, équipement, étiquetage) et liste les défauts visibles : comprimé "
-    "cassé/manquant/décoloré, blister mal scellé ou vide, corps étranger, "
-    "étiquette illisible, encrassement machine… Si rien d'anormal, dis-le. "
-    "3 phrases maximum, en français, factuel."
+    "Tu es le contrôleur qualité d'un atelier de confection. Décris ce que montre "
+    "cette photo prise sur une chaîne (vêtement, pièce coupée, couture, machine, "
+    "étiquetage) et liste les défauts visibles : couture irrégulière ou sautée, "
+    "tache, accroc, mauvaise taille ou couleur, étiquette absente ou illisible… "
+    "Si rien d'anormal, dis-le. 3 phrases maximum, en français, factuel."
 )
 
 
@@ -340,15 +337,6 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
         photo=bool(payload.image_base64),
     )
 
-    # « oui »/« non » à une proposition proactive du superviseur : décision
-    # directe (human-in-the-loop), sans passer par l'agent.
-    if message and not payload.image_base64:
-        decision = await asyncio.to_thread(
-            proactive_service.traiter_reponse_operateur, e164, message
-        )
-        if decision is not None:
-            return await _reponse(decision, entree_vocale, e164, [])
-
     # Photo : analyse vision injectée dans le message — l'agent commente,
     # rapproche des seuils qualité et peut proposer une action.
     if payload.image_base64:
@@ -364,8 +352,8 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
             f"{message or 'Que penses-tu de cette photo ?'}"
         )
 
-    # Préfixe d'identité : l'agent sait à qui il parle (« envoie-moi le bilan »
-    # → envoyer_rapport vers ce numéro). Le prompt lui interdit de l'afficher.
+    # Préfixe d'identité : l'agent sait à qui il parle (« envoie-moi la
+    # procédure » → envoyer_document vers ce numéro). Le prompt lui interdit de l'afficher.
     qui = f"{payload.push_name} {e164}" if payload.push_name else e164
     message = f"[WhatsApp — {qui}] {message}"
     # Un thread par numéro : mémoire multi-tours et confirmations comme sur le web.

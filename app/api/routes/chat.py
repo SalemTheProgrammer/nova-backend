@@ -36,9 +36,8 @@ _READONLY = frozenset(READONLY_TOOL_NAMES)
 
 def _outils_web(user: Utilisateur) -> list[str]:
     """Périmètre d'outils du canal WEB : Nova y DISCUTE et MONTRE, mais n'agit
-    pas. On restreint donc à la lecture seule (TRS, stock, alertes, documents,
-    graphiques/jauges…) quel que soit le rôle — les commandes atelier et les
-    envois restent sur WhatsApp. La garantie forte est côté graphe
+    pas. On restreint donc à la lecture seule (documents, consultations…) quel
+    que soit le rôle — les envois restent sur WhatsApp. La garantie forte est côté graphe
     (`outils_autorises` filtre chaque appel), ceci n'en est que l'entrée."""
     autorises = auth_service.outils_pour(user)  # None = admin (tous les outils)
     if autorises is None:

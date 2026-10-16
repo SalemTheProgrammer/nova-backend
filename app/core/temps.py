@@ -1,7 +1,7 @@
 """Horloge de l'usine : conversions UTC ↔ heure locale (Africa/Tunis).
 
 La base stocke tout en UTC naïf (`datetime.utcnow()`), mais TOUT ce qui est
-montré à l'opérateur (chat, diagnostics du superviseur, rapports) doit être en
+montré à l'opérateur (chat, rapports) doit être en
 heure locale de l'usine. La Tunisie est à UTC+1 toute l'année depuis 2009 : un
 décalage fixe évite la dépendance optionnelle `tzdata`, absente de certaines
 installations Python Windows utilisées en démo (même choix que `agent_node`).

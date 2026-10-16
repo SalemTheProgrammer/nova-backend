@@ -1,7 +1,7 @@
 """Envoi de messages sortants par Nova : e-mail (SMTP) et WhatsApp (Baileys).
 
-Utilisé par les outils agent `envoyer_rapport` / `envoyer_message` : l'opérateur
-demande « envoie le bilan à ce numéro / cet e-mail », l'agent confirme puis
+Utilisé par les outils agent `envoyer_message` / `envoyer_document` : l'opérateur
+demande « envoie ce document à ce numéro / cet e-mail », l'agent confirme puis
 appelle ce service. WhatsApp passe par le petit service Node local (dossier
 `whatsapp/`, bibliothèque Baileys = WhatsApp Web) — un scan de QR code une
 seule fois, aucun compte ni API payante. Chaque canal explique lui-même quoi

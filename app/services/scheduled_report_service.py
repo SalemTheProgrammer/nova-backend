@@ -1,10 +1,12 @@
 """Envoi automatique et périodique du bilan de production (fin de poste).
 
 Désactivé par défaut. Activé par `AUTO_BILAN_ENABLED=true` (+ canal/destinataire)
-dans le .env : à chaque heure listée dans `AUTO_BILAN_HEURES`, génère le bilan
-d'équipe en PDF et l'envoie sans confirmation opérateur — contrairement à
-`envoyer_rapport` (déclenché en conversation, confirmation obligatoire à chaque
-envoi), ici l'opt-in fait en configuration tient lieu d'accord préalable.
+dans le .env : à chaque heure listée dans `AUTO_BILAN_HEURES`, le bilan d'équipe
+part sans confirmation opérateur — l'opt-in fait en configuration tient lieu
+d'accord préalable.
+
+Le rapport PDF n'est pas encore disponible dans cette édition : à l'heure dite,
+l'envoi est journalisé `rapport_non_disponible` et rien ne part.
 """
 from __future__ import annotations
 
@@ -12,10 +14,7 @@ import asyncio
 from datetime import date, datetime
 
 from app.core.config import get_settings
-from app.core.exceptions import AppError
 from app.core.logging import get_logger
-from app.db.session import session_scope
-from app.services import notify_service, pdf_service
 
 logger = get_logger(__name__)
 
@@ -33,24 +32,11 @@ def _heures_configurees() -> list[str]:
 
 def _envoyer_bilan_auto(heure: str) -> None:
     settings = get_settings()
-    horodatage = f"{datetime.now():%d/%m/%Y %H:%M}"
-    with session_scope() as db:
-        pdf = pdf_service.generer_bilan_equipe_pdf(db)
-    nom_fichier = "bilan-production.pdf"
-    sujet = f"Bilan de production Nova — {horodatage}"
-    corps = f"{sujet}\nBilan automatique de fin de poste ({heure}), généré par Nova."
-    try:
-        if settings.auto_bilan_canal == "whatsapp":
-            resultat = notify_service.envoyer_whatsapp(
-                settings.auto_bilan_destinataire, corps, document=(nom_fichier, pdf)
-            )
-        else:
-            resultat = notify_service.envoyer_email(
-                settings.auto_bilan_destinataire, sujet, corps, piece_jointe=(nom_fichier, pdf)
-            )
-        logger.info("bilan_auto_envoye", heure=heure, canal=settings.auto_bilan_canal, resultat=resultat)
-    except AppError as exc:
-        logger.warning("bilan_auto_echec", heure=heure, error=exc.message)
+    logger.warning(
+        "rapport_non_disponible",
+        heure=heure,
+        canal=settings.auto_bilan_canal,
+    )
 
 
 def _tick() -> None:

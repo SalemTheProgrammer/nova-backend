@@ -40,7 +40,7 @@ def _set_sqlite_pragma(dbapi_connection, connection_record) -> None:  # noqa: AN
     """Enforce foreign keys on SQLite (off by default), plus concurrency pragmas.
 
     WAL permet lecteurs et écrivain simultanés (le dashboard lit pendant que
-    l'ingestion Sparkplug écrit) ; busy_timeout fait patienter au lieu de lever
+    une tâche de fond écrit) ; busy_timeout fait patienter au lieu de lever
     « database is locked » quand deux écritures se croisent.
     """
     if settings.database_url.startswith("sqlite"):

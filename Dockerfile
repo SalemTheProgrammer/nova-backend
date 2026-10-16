@@ -11,8 +11,6 @@ COPY requirements.txt .
 RUN pip install --upgrade pip && pip install -r requirements.txt
 
 COPY app ./app
-# Migrations et seeds (ex. `docker compose exec nova-backend python -m scripts.migrate_mqtt`).
-COPY scripts ./scripts
 
 # Run as a non-root user. /data holds the SQLite databases and uploaded PDFs
 # (mount a volume there; see the root docker-compose.yml).

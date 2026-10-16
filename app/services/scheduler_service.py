@@ -3,7 +3,9 @@
 L'agent enregistre un `EnvoiPlanifie` (outil `planifier_envoi`, confirmation
 opérateur obligatoire) ; la boucle ici vérifie toutes les quelques secondes et
 exécute les envois arrivés à échéance. Le contenu est produit AU MOMENT de
-l'envoi (bilan avec données fraîches, PDF du document relu sur disque).
+l'envoi (PDF du document relu sur disque). Les rapports programmés (type
+« bilan ») ne sont pas encore disponibles : ils sont journalisés
+`rapport_non_disponible` et marqués en échec.
 
 Persisté en base : les envois survivent à un redémarrage. Un envoi retrouvé
 trop en retard (backend éteint) est marqué MANQUE plutôt qu'envoyé périmé sans
@@ -21,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
 from app.db.session import session_scope
-from app.models import DocumentRag, EnvoiPlanifie, OrdreFabrication
+from app.models import DocumentRag, EnvoiPlanifie
 from app.models.envoi_planifie import (
     STATUT_ANNULE,
     STATUT_ECHEC,
@@ -32,7 +34,7 @@ from app.models.envoi_planifie import (
     TYPE_DOCUMENT,
     TYPE_MESSAGE,
 )
-from app.services import document_files, notify_service, pdf_service
+from app.services import document_files, notify_service
 
 logger = get_logger(__name__)
 
@@ -51,20 +53,18 @@ def programmer(
     canal: str,
     destinataire: str,
     execute_at: datetime,
-    of_numero: str | None = None,
     document_id: int | None = None,
     contenu: str | None = None,
     demande_par: str | None = None,
 ) -> EnvoiPlanifie:
     """Enregistre un envoi à exécuter à `execute_at` (la boucle s'en charge)."""
-    if type_envoi not in (TYPE_BILAN, TYPE_DOCUMENT, TYPE_MESSAGE):
+    if type_envoi not in (TYPE_DOCUMENT, TYPE_MESSAGE):
         raise ValueError(f"type_envoi invalide : {type_envoi!r}")
     envoi = EnvoiPlanifie(
         type_envoi=type_envoi,
         canal=canal,
         destinataire=destinataire,
         execute_at=execute_at,
-        of_numero=of_numero,
         document_id=document_id,
         contenu=contenu,
         demande_par=demande_par,
@@ -127,29 +127,18 @@ def _executer(db: Session, envoi: EnvoiPlanifie) -> str:
         corps = f"{sujet}\nEnvoi programmé, transmis par Nova."
         return _envoyer(envoi.canal, envoi.destinataire, sujet, corps, (nom_fichier, contenu_pdf))
 
-    # TYPE_BILAN — généré maintenant : les chiffres sont ceux de l'heure d'envoi.
-    if envoi.of_numero:
-        of: OrdreFabrication | None = None
-        if envoi.of_numero.isdigit():
-            of = db.get(OrdreFabrication, int(envoi.of_numero))
-        if of is None:
-            of = db.execute(
-                select(OrdreFabrication).where(OrdreFabrication.numero == envoi.of_numero)
-            ).scalars().first()
-        if of is None:
-            raise AppError(f"OF introuvable : {envoi.of_numero}")
-        pdf = pdf_service.generer_bilan_of_pdf(db, of)
-        nom_fichier = f"bilan-of-{of.numero.replace('/', '-')}.pdf"
-        sujet = f"Bilan OF {of.numero} — {horodatage}"
-    else:
-        pdf = pdf_service.generer_bilan_equipe_pdf(db)
-        nom_fichier = "bilan-production.pdf"
-        sujet = f"Bilan de production Nova — {horodatage}"
-    corps = f"{sujet}\nEnvoi programmé, bilan en pièce jointe (PDF), généré par Nova."
-    return _envoyer(envoi.canal, envoi.destinataire, sujet, corps, (nom_fichier, pdf))
+    raise AppError(f"Type d'envoi inconnu : {envoi.type_envoi!r}")
 
 
 def _traiter_envoi_du(db: Session, envoi: EnvoiPlanifie, maintenant: datetime) -> None:
+    if envoi.type_envoi == TYPE_BILAN:
+        # Les rapports PDF ne sont pas encore disponibles dans cette édition :
+        # pas de nouvel essai, l'envoi est clos en échec explicite.
+        envoi.statut = STATUT_ECHEC
+        envoi.executed_at = maintenant
+        envoi.resultat = "Non envoyé : rapport non disponible."
+        logger.warning("rapport_non_disponible", envoi_id=envoi.id)
+        return
     if maintenant - envoi.execute_at > RETARD_MAX:
         envoi.statut = STATUT_MANQUE
         envoi.executed_at = maintenant

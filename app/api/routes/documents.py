@@ -1,6 +1,6 @@
 """Base documentaire : upload PDF (indexation Pinecone), liste, suppression, recherche.
 
-Accepte tout document d'entreprise : normes BPF/GMP, procédures qualité, manuels
+Accepte tout document d'entreprise : procédures, consignes qualité, manuels
 machines, fiches techniques… Le PDF source est conservé pour la consultation
 dans le viewer (citations surlignées).
 """

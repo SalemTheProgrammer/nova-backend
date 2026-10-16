@@ -1,7 +1,7 @@
 """Consultation du journal d'audit des actions (lecture seule, ajout seul).
 
-Chaque action irréversible/sortante exécutée (outil confirmé en conversation ou
-proposition du superviseur approuvée) y est attribuée : quoi, quand, depuis quel
+Chaque action irréversible/sortante exécutée (outil confirmé en conversation)
+y est attribuée : quoi, quand, depuis quel
 canal, par qui. Voir `models/audit.py`.
 """
 from __future__ import annotations

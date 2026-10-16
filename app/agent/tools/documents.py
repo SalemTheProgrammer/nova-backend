@@ -49,18 +49,18 @@ def _as_int(valeur: object) -> int | None:
 
 @tool(response_format="content_and_artifact")
 def rechercher_documents(question: str) -> tuple[str, dict | None]:
-    """Recherche dans les documents téléversés (normes BPF/GMP, procédures qualité,
+    """Recherche dans les documents téléversés (procédures, consignes qualité,
     manuels machines, fiches techniques…) et renvoie les passages les plus pertinents
     AVEC leur source et leur numéro de page.
 
     À utiliser dès que l'opérateur pose une question dont la réponse se trouve dans la
     documentation (« que dit la norme sur… », « procédure de… », « comment régler la
     machine… »). Construis ensuite ta réponse à partir de ces passages et CITE
-    systématiquement la source et la page (ex. « (BPF Tunisie, p. 12) »).
+    systématiquement la source et la page (ex. « (Procédure de coupe, p. 3) »).
 
     Les documents peuvent être en français OU en anglais : formule `question` avec les
-    termes clés dans les deux langues quand un équivalent existe (ex. pour le TRS :
-    « TRS OEE Overall Equipment Effectiveness définition »).
+    termes clés dans les deux langues quand un équivalent existe (ex. pour le
+    rendement : « rendement efficiency définition »).
     """
     logger.info("tool_rechercher_documents", question=question)
     try:
