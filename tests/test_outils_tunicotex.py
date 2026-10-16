@@ -116,7 +116,26 @@ def test_commandes(divatex):
 
 def test_divatex_down(monkeypatch):
     set_engine(create_engine("mysql+pymysql://x:y@127.0.0.1:1/n"))
-    assert appeler(situation_atelier, {})[0] == "Base DIVA injoignable."
+    try:
+        assert appeler(situation_atelier, {})[0] == "Base DIVA injoignable."
+    finally:
+        set_engine(None)
+
+
+def test_erreur_de_valeur_inattendue_se_propage(divatex, monkeypatch):
+    from app.agent.tools import tunicotex as tt
+
+    def casse(*_a, **_k):
+        raise ValueError("bug interne")
+
+    monkeypatch.setattr(tt.prod, "situation_atelier", casse)
+    with pytest.raises(ValueError, match="bug interne"):
+        situation_atelier.invoke({})
+
+
+def test_periode_trop_longue_message_cible(divatex):
+    txt, art = appeler(rendement_operateurs, {"periode_jours": 40})
+    assert "31 jours" in txt and art is None
 
 
 def test_aucun_outil_a_confirmation():

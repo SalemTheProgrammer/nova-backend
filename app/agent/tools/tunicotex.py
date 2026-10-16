@@ -72,6 +72,22 @@ def _tuile(libelle: str, valeur, unite: str | None = None, etat: str = "neutre",
     return t
 
 
+class _ErreurSaisie(Exception):
+    """Saisie utilisateur invalide (date, période) : message affichable tel quel."""
+
+
+def _saisie(fonction, *args, **kwargs):
+    """Appelle `fonction` en requalifiant ses ValueError en erreur de saisie.
+
+    Seuls les appels de résolution de date/période et le plafond de 31 jours
+    passent par ici : toute autre ValueError reste un vrai bug et se propage.
+    """
+    try:
+        return fonction(*args, **kwargs)
+    except ValueError as exc:
+        raise _ErreurSaisie(str(exc)) from None
+
+
 def _hors_service(fonction):
     """Traduit l'indisponibilité de DIVA et les erreurs de saisie en texte d'outil."""
 
@@ -81,14 +97,14 @@ def _hors_service(fonction):
             return fonction(*args, **kwargs)
         except connexion.DivatexIndisponible:
             return "Base DIVA injoignable.", None
-        except ValueError as exc:
+        except _ErreurSaisie as exc:
             return str(exc), None
 
     return enveloppe
 
 
 def _jour(texte: str | None) -> Date:
-    return resoudre_jour(texte, connexion.date_reference())
+    return _saisie(resoudre_jour, texte, connexion.date_reference())
 
 
 # --- production ------------------------------------------------------------
@@ -305,9 +321,10 @@ def rendement_operateurs(
         if g is None:
             return _groupe_inconnu(groupe, jour), None
         groupe_id = g.id
-    du, au = resoudre_periode(periode_jours, jour)
+    du, au = _saisie(resoudre_periode, periode_jours, jour)
     classement = [
-        r for r in ops.classement_operateurs(du, au, ligne_id=ligne_id, groupe_id=groupe_id)
+        r for r in _saisie(
+            ops.classement_operateurs, du, au, ligne_id=ligne_id, groupe_id=groupe_id)
         if r.rendement is not None
     ]
     if not classement:
@@ -360,8 +377,8 @@ def fiche_operateur(operateur: str, periode_jours: int | None = 7) -> tuple[str,
             _table(f"Opérateurs — {operateur}", jour, ["Opérateur", "Matricule"],
                    [[o.nom_complet, o.matricule] for o in trouves]),
         )
-    du, au = resoudre_periode(periode_jours, jour)
-    fiche = ops.fiche_operateur(trouves[0].id, du, au)
+    du, au = _saisie(resoudre_periode, periode_jours, jour)
+    fiche = _saisie(ops.fiche_operateur, trouves[0].id, du, au)
     if fiche is None:
         return _fin(f"Aucun opérateur trouvé pour « {operateur} ».", jour), None
     t = fiche.total
