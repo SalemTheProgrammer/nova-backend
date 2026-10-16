@@ -2,7 +2,8 @@
 
 Différence avec `notify` (envoi immédiat) : ici l'envoi est DIFFÉRÉ. L'agent
 enregistre l'intention ; `scheduler_service` l'exécute à l'échéance et génère
-le contenu À CE MOMENT-LÀ (PDF du document relu sur disque).
+le contenu À CE MOMENT-LÀ (PDF du document relu sur disque, rapport généré sur
+les données du moment).
 
 L'agent n'a pas d'horloge : le délai est donné en MINUTES à partir de maintenant
 (`delai_minutes`), et le serveur calcule l'heure d'exécution. Comme tout envoi
@@ -17,19 +18,22 @@ from langchain_core.tools import tool
 
 from app.agent.tools import confirmation_gate
 from app.agent.tools.notify import CANAUX, CONFIRMATION_REQUISE, _destinataire_canonique
+from app.agent.tools.tunicotex import _ErreurSaisie, resoudre_parametres_rapport
 from app.db.session import session_scope
+from app.integrations.divatex import connexion
 from app.models.envoi_planifie import (
     STATUT_EN_ATTENTE,
     TYPE_DOCUMENT,
     TYPE_MESSAGE,
+    TYPE_RAPPORT,
 )
-from app.services import document_files, scheduler_service
+from app.services import document_files, scheduler_service, tunicotex_pdf
 
 # Bornes de bon sens sur le délai (le serveur, pas le LLM, fait foi sur l'heure).
 DELAI_MIN_MINUTES = 1
 DELAI_MAX_MINUTES = 7 * 24 * 60  # une semaine
 
-TYPES = (TYPE_DOCUMENT, TYPE_MESSAGE)
+TYPES = (TYPE_DOCUMENT, TYPE_MESSAGE, TYPE_RAPPORT)
 
 
 def _echeance(delai_minutes: int) -> datetime:
@@ -45,6 +49,14 @@ def planifier_envoi(
     confirmation: bool,
     document_nom: str | None = None,
     contenu: str | None = None,
+    rapport: str | None = None,
+    date: str | None = None,
+    du: str | None = None,
+    au: str | None = None,
+    groupe: str | None = None,
+    chaine: str | None = None,
+    of: str | None = None,
+    horizon_jours: int | None = None,
     *,
     config: RunnableConfig,
 ) -> tuple[str, dict | None]:
@@ -55,6 +67,11 @@ def planifier_envoi(
     - "document" : un document de la base documentaire, envoyé tel quel. Donne
       son nom approximatif dans `document_nom` (« procédure de coupe »).
     - "message" : un message texte libre que tu rédiges dans `contenu`.
+    - "rapport" : un rapport PDF Tunicotex, `rapport` = R1 (fiche de production
+      journalière), R2 (suivi des phases), R3 (rendement opérateurs), R4 (commandes
+      à risque) ou R5 (fiche OF, `of` obligatoire). Mêmes paramètres que
+      `rapport_pdf` (`date`, `du`, `au`, `groupe`, `chaine`, `of`, `horizon_jours`),
+      résolus maintenant ; les données du rapport sont lues à l'échéance.
 
     À utiliser DÈS QU'un envoi est demandé pour PLUS TARD : « envoie-moi la
     procédure X dans une heure », « rappelle-moi l'équipe de nuit dans 30 min ».
@@ -64,7 +81,11 @@ def planifier_envoi(
     obtiens un « oui » explicite avant de rappeler avec confirmation=true.
     """
     if type_envoi not in TYPES:
-        return f"type_envoi invalide : {type_envoi!r}. Utilise \"document\" ou \"message\".", None
+        return (
+            f"type_envoi invalide : {type_envoi!r}. Utilise \"document\", \"message\" "
+            "ou \"rapport\".",
+            None,
+        )
     if canal not in CANAUX:
         return f"Canal invalide : {canal!r}. Utilise \"email\" ou \"whatsapp\".", None
     if delai_minutes < DELAI_MIN_MINUTES or delai_minutes > DELAI_MAX_MINUTES:
@@ -80,7 +101,26 @@ def planifier_envoi(
         # clair à l'opérateur (l'échec à l'échéance serait silencieux).
         document_id: int | None = None
         texte: str | None = None
-        if type_envoi == TYPE_DOCUMENT:
+        parametres: dict | None = None
+        if type_envoi == TYPE_RAPPORT:
+            if not rapport:
+                return (
+                    "Précise le `rapport` à programmer : "
+                    + ", ".join(f"{k} ({v})" for k, v in tunicotex_pdf.TITRES.items())
+                    + ".",
+                    None,
+                )
+            try:
+                params = resoudre_parametres_rapport(
+                    rapport, date, du, au, groupe, chaine, of, horizon_jours
+                )
+            except _ErreurSaisie as exc:
+                return str(exc), exc.artifact
+            except connexion.DivatexIndisponible:
+                return "Base DIVA injoignable.", None
+            parametres = params.to_dict()
+            quoi = f"le rapport « {tunicotex_pdf.TITRES[rapport]} »"
+        elif type_envoi == TYPE_DOCUMENT:
             document = document_files.trouver_document(db, document_nom or "")
             if document is None:
                 return (
@@ -112,6 +152,8 @@ def planifier_envoi(
                 "delai_minutes": delai_minutes,
                 "document_id": document_id,
                 "contenu": texte,
+                "rapport": rapport if type_envoi == TYPE_RAPPORT else None,
+                "parametres": parametres,
             },
             confirmation,
         ):
@@ -129,6 +171,8 @@ def planifier_envoi(
             execute_at=echeance,
             document_id=document_id,
             contenu=texte,
+            rapport=rapport if type_envoi == TYPE_RAPPORT else None,
+            parametres=parametres,
             demande_par=demande_par,
         )
         envoi_id = envoi.id

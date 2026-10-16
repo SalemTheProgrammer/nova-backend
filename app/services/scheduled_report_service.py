@@ -1,12 +1,12 @@
-"""Envoi automatique et périodique du bilan de production (fin de poste).
+"""Envoi automatique et périodique du rapport du matin (par défaut R1).
 
 Désactivé par défaut. Activé par `AUTO_BILAN_ENABLED=true` (+ canal/destinataire)
-dans le .env : à chaque heure listée dans `AUTO_BILAN_HEURES`, le bilan d'équipe
-part sans confirmation opérateur — l'opt-in fait en configuration tient lieu
-d'accord préalable.
+dans le .env : à chaque heure listée dans `AUTO_BILAN_HEURES`, le rapport
+`AUTO_BILAN_RAPPORT` part en PDF sans confirmation opérateur — l'opt-in fait en
+configuration tient lieu d'accord préalable.
 
-Le rapport PDF n'est pas encore disponible dans cette édition : à l'heure dite,
-l'envoi est journalisé `rapport_non_disponible` et rien ne part.
+Sans destinataire configuré, ou base DIVA injoignable, l'envoi du créneau est
+journalisé et ignoré (la boucle continue).
 """
 from __future__ import annotations
 
@@ -14,7 +14,10 @@ import asyncio
 from datetime import date, datetime
 
 from app.core.config import get_settings
+from app.core.exceptions import AppError
 from app.core.logging import get_logger
+from app.integrations.divatex import connexion
+from app.services import scheduler_service, tunicotex_pdf
 
 logger = get_logger(__name__)
 
@@ -32,11 +35,22 @@ def _heures_configurees() -> list[str]:
 
 def _envoyer_bilan_auto(heure: str) -> None:
     settings = get_settings()
-    logger.warning(
-        "rapport_non_disponible",
-        heure=heure,
-        canal=settings.auto_bilan_canal,
-    )
+    if not settings.auto_bilan_destinataire:
+        logger.warning("bilan_auto_sans_destinataire", heure=heure)
+        return
+    try:
+        resultat = scheduler_service.envoyer_rapport_pdf(
+            settings.auto_bilan_canal,
+            settings.auto_bilan_destinataire,
+            settings.auto_bilan_rapport,
+            tunicotex_pdf.ParametresRapport(),
+        )
+    except connexion.DivatexIndisponible:
+        logger.warning("rapport_non_disponible", heure=heure, canal=settings.auto_bilan_canal)
+    except AppError as exc:
+        logger.error("bilan_auto_echec", heure=heure, error=exc.message)
+    else:
+        logger.info("bilan_auto_envoye", heure=heure, resultat=resultat)
 
 
 def _tick() -> None:

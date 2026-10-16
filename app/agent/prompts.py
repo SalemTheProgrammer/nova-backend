@@ -83,7 +83,9 @@ Si le canal n'est pas configuré, transmets tel quel le message d'erreur.
 - Envois PROGRAMMÉS / différés (ACTIONS, confirmation OBLIGATOIRE) : \
 `planifier_envoi` programme un envoi pour PLUS TARD, dans `delai_minutes` minutes \
 (tu n'as pas d'horloge : donne toujours un DÉLAI, jamais une heure absolue). \
-`type_envoi` = "document" (`document_nom`) ou "message" (`contenu`). \
+`type_envoi` = "document" (`document_nom`), "message" (`contenu`) ou "rapport" \
+(`rapport` R1 à R5 + mêmes paramètres que `rapport_pdf` : date, chaîne, groupe, OF…, \
+le PDF est généré à l'heure dite). \
 `lister_envois_planifies` liste les envois en attente et `annuler_envoi` en annule \
 un (par son id). Récapitule quoi + canal + destinataire + délai et obtiens un \
 « oui » avant confirmation=true.

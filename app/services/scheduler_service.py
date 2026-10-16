@@ -3,9 +3,8 @@
 L'agent enregistre un `EnvoiPlanifie` (outil `planifier_envoi`, confirmation
 opérateur obligatoire) ; la boucle ici vérifie toutes les quelques secondes et
 exécute les envois arrivés à échéance. Le contenu est produit AU MOMENT de
-l'envoi (PDF du document relu sur disque). Les rapports programmés (type
-« bilan ») ne sont pas encore disponibles : ils sont journalisés
-`rapport_non_disponible` et marqués en échec.
+l'envoi (PDF du document relu sur disque, rapport Tunicotex généré sur les
+données DIVA du moment). Un type inconnu est clos en échec, sans nouvel essai.
 
 Persisté en base : les envois survivent à un redémarrage. Un envoi retrouvé
 trop en retard (backend éteint) est marqué MANQUE plutôt qu'envoyé périmé sans
@@ -15,6 +14,7 @@ retentée avant d'abandonner.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
+from app.integrations.divatex import connexion
 from app.db.session import session_scope
 from app.models import DocumentRag, EnvoiPlanifie
 from app.models.envoi_planifie import (
@@ -30,11 +31,11 @@ from app.models.envoi_planifie import (
     STATUT_EN_ATTENTE,
     STATUT_ENVOYE,
     STATUT_MANQUE,
-    TYPE_BILAN,
     TYPE_DOCUMENT,
     TYPE_MESSAGE,
+    TYPE_RAPPORT,
 )
-from app.services import document_files, notify_service
+from app.services import document_files, notify_service, tunicotex_pdf
 
 logger = get_logger(__name__)
 
@@ -44,6 +45,7 @@ RETARD_MAX = timedelta(minutes=30)
 # Erreur à l'envoi : nouvel essai après ce délai, TENTATIVES_MAX fois en tout.
 DELAI_REESSAI = timedelta(seconds=60)
 TENTATIVES_MAX = 3
+TYPES_CONNUS = (TYPE_DOCUMENT, TYPE_MESSAGE, TYPE_RAPPORT)
 
 
 def programmer(
@@ -55,10 +57,12 @@ def programmer(
     execute_at: datetime,
     document_id: int | None = None,
     contenu: str | None = None,
+    rapport: str | None = None,
+    parametres: dict | None = None,
     demande_par: str | None = None,
 ) -> EnvoiPlanifie:
     """Enregistre un envoi à exécuter à `execute_at` (la boucle s'en charge)."""
-    if type_envoi not in (TYPE_DOCUMENT, TYPE_MESSAGE):
+    if type_envoi not in TYPES_CONNUS:
         raise ValueError(f"type_envoi invalide : {type_envoi!r}")
     envoi = EnvoiPlanifie(
         type_envoi=type_envoi,
@@ -67,6 +71,8 @@ def programmer(
         execute_at=execute_at,
         document_id=document_id,
         contenu=contenu,
+        rapport=rapport,
+        parametres_json=json.dumps(parametres) if parametres is not None else None,
         demande_par=demande_par,
     )
     db.add(envoi)
@@ -111,6 +117,22 @@ def _envoyer(
     return notify_service.envoyer_whatsapp(destinataire, corps, document=document)
 
 
+def envoyer_rapport_pdf(
+    canal: str, destinataire: str, rapport: str, params: tunicotex_pdf.ParametresRapport
+) -> str:
+    """Génère le rapport (données DIVA du moment) et l'envoie en pièce jointe.
+
+    Légende / objet : « <titre> — Données au JJ/MM/AAAA ». Lève AppError
+    (dont `DivatexIndisponible`) en cas d'échec.
+    """
+    try:
+        nom_fichier, pdf = tunicotex_pdf.generer_rapport(rapport, params)
+    except ValueError as exc:
+        raise AppError(str(exc)) from exc
+    sujet = f"{tunicotex_pdf.TITRES[rapport]} — Données au {connexion.date_reference():%d/%m/%Y}"
+    return _envoyer(canal, destinataire, sujet, sujet, (nom_fichier, pdf))
+
+
 def _executer(db: Session, envoi: EnvoiPlanifie) -> str:
     """Produit le contenu (frais) et envoie. Lève AppError en cas d'échec."""
     horodatage = f"{datetime.now():%d/%m/%Y %H:%M}"
@@ -127,17 +149,25 @@ def _executer(db: Session, envoi: EnvoiPlanifie) -> str:
         corps = f"{sujet}\nEnvoi programmé, transmis par Nova."
         return _envoyer(envoi.canal, envoi.destinataire, sujet, corps, (nom_fichier, contenu_pdf))
 
+    if envoi.type_envoi == TYPE_RAPPORT:
+        try:
+            params = tunicotex_pdf.ParametresRapport.from_dict(
+                json.loads(envoi.parametres_json or "{}")
+            )
+        except (ValueError, TypeError) as exc:
+            raise AppError(f"Paramètres du rapport illisibles : {exc}") from exc
+        return envoyer_rapport_pdf(envoi.canal, envoi.destinataire, envoi.rapport or "", params)
+
     raise AppError(f"Type d'envoi inconnu : {envoi.type_envoi!r}")
 
 
 def _traiter_envoi_du(db: Session, envoi: EnvoiPlanifie, maintenant: datetime) -> None:
-    if envoi.type_envoi == TYPE_BILAN:
-        # Les rapports PDF ne sont pas encore disponibles dans cette édition :
-        # pas de nouvel essai, l'envoi est clos en échec explicite.
+    if envoi.type_envoi not in TYPES_CONNUS:
+        # Type inconnu (ligne héritée) : échec explicite, pas de nouvel essai.
         envoi.statut = STATUT_ECHEC
         envoi.executed_at = maintenant
-        envoi.resultat = "Non envoyé : rapport non disponible."
-        logger.warning("rapport_non_disponible", envoi_id=envoi.id)
+        envoi.resultat = f"Non envoyé : type d'envoi inconnu ({envoi.type_envoi!r})."
+        logger.error("envoi_planifie_type_inconnu", envoi_id=envoi.id)
         return
     if maintenant - envoi.execute_at > RETARD_MAX:
         envoi.statut = STATUT_MANQUE

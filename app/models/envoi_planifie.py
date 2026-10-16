@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, func
+from sqlalchemy import DateTime, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -22,9 +22,9 @@ STATUT_ECHEC = "ECHEC"
 STATUT_ANNULE = "ANNULE"
 STATUT_MANQUE = "MANQUE"
 
-# Ce qui est envoyé : bilan (équipe ou OF si of_numero), document de la base
-# documentaire (document_id), ou message texte libre (contenu).
-TYPE_BILAN = "bilan"
+# Ce qui est envoyé : rapport PDF Tunicotex (rapport + parametres_json), document
+# de la base documentaire (document_id), ou message texte libre (contenu).
+TYPE_RAPPORT = "rapport"
 TYPE_DOCUMENT = "document"
 TYPE_MESSAGE = "message"
 
@@ -36,8 +36,10 @@ class EnvoiPlanifie(Base):
     type_envoi: Mapped[str] = mapped_column(String(20), nullable=False)
     canal: Mapped[str] = mapped_column(String(20), nullable=False)
     destinataire: Mapped[str] = mapped_column(String(255), nullable=False)
-    # Bilan d'un OF précis (sinon bilan d'équipe) — résolu à l'envoi, données fraîches.
-    of_numero: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    # Rapport PDF (R1..R5) : généré à l'envoi avec les paramètres résolus à la
+    # programmation (`ParametresRapport.to_dict()` en JSON).
+    rapport: Mapped[str | None] = mapped_column(String(5), nullable=True)
+    parametres_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Document de la base documentaire (PDF source envoyé tel quel).
     document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Message texte libre (type_envoi = "message").
@@ -58,8 +60,8 @@ class EnvoiPlanifie(Base):
 
     def libelle(self) -> str:
         """Description lisible de l'envoi, pour les confirmations et les listes."""
-        if self.type_envoi == TYPE_BILAN:
-            quoi = f"le bilan de l'OF {self.of_numero}" if self.of_numero else "le bilan d'équipe"
+        if self.type_envoi == TYPE_RAPPORT:
+            quoi = f"le rapport {self.rapport}"
         elif self.type_envoi == TYPE_DOCUMENT:
             quoi = f"le document n°{self.document_id}"
         else:

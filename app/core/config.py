@@ -101,8 +101,10 @@ class Settings(BaseSettings):
     auto_bilan_canal: Literal["email", "whatsapp"] = "email"
     auto_bilan_destinataire: str = ""
     # Heures de déclenchement (HH:MM, séparées par des virgules) — par défaut,
-    # les fins de poste usuelles en 3x8.
-    auto_bilan_heures: str = "06:00,14:00,22:00"
+    # le rapport du matin.
+    auto_bilan_heures: str = "07:30"
+    # Rapport envoyé automatiquement (R1 = fiche de production journalière).
+    auto_bilan_rapport: Literal["R1", "R2", "R3", "R4"] = "R1"
 
     # Base documentaire (RAG) — stockage des PDF sources pour consultation/citations
     documents_pdf_dir: str = "./data/documents"
