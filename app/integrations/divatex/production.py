@@ -124,7 +124,7 @@ def production_lignes(jour: date, groupe_id: int | None = None) -> list[Producti
 
     scans: dict[int, list[tuple[int, float, float]]] = defaultdict(list)
     for r in requete(
-        "SELECT IDChaineMontage, IDEmploye, SUM(Temps * Quantite * Majoration) AS avec_maj, "
+        "SELECT IDChaineMontage, IDEmploye, SUM(Temps * Quantite * COALESCE(NULLIF(Majoration, 0), 1)) AS avec_maj, "
         "SUM(Temps * Quantite) AS sans_maj FROM lectures "
         "WHERE Date = :jour AND IdPhase = 0 GROUP BY IDChaineMontage, IDEmploye",
         jour=iso,

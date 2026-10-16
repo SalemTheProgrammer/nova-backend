@@ -46,3 +46,8 @@ def test_objectif_perime():
     assert objectif_perime(date(2026, 3, 31), date(2026, 8, 28))
     assert not objectif_perime(date(2026, 8, 25), date(2026, 8, 28))
     assert not objectif_perime(date(2026, 8, 21), date(2026, 8, 28))
+
+
+def test_majoration_absente_comptee_1():
+    assert minutes_produites([(60, 1, None)], P) == pytest.approx(1.0)
+    assert minutes_produites([(60, 1, 0)], P) == pytest.approx(1.0)

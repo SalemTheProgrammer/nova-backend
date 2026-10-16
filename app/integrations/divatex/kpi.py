@@ -34,7 +34,7 @@ def minutes_produites(
     for temps, quantite, majoration in scans:
         minutes = float(temps or 0) * float(quantite or 0) * p.facteur_temps
         if p.appliquer_majoration:
-            minutes *= float(majoration or 0)
+            minutes *= float(majoration or 0) or 1.0
         total += minutes
     return total
 
