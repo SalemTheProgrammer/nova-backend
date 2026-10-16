@@ -5,7 +5,7 @@ commentaire d'en-tête de `app/agent/graph.py` : il casse l'injection du
 `config` LangGraph dans `call_model` et désactive silencieusement toute la
 restriction d'outils par utilisateur.
 """
-from datetime import timedelta
+from datetime import date, timedelta
 
 from langchain_core.messages import SystemMessage, trim_messages
 from langchain_core.runnables import RunnableConfig
@@ -13,7 +13,9 @@ from langchain_core.runnables import RunnableConfig
 from app.agent.prompts import SYSTEM_PROMPT, VOICE_PROMPT_ADDENDUM, WHATSAPP_PROMPT_ADDENDUM
 from app.agent.state import AgentState
 from app.agent.tools import ALL_TOOLS, NAVIGATION_TOOLS
+from app.core.config import get_settings
 from app.core.temps import heure_usine
+from app.integrations.divatex import connexion
 from app.services.llm import get_chat_model
 
 # Phrase de refus exacte quand l'opérateur demande une capacité hors de son
@@ -70,6 +72,28 @@ def _addendum_perimetre(autorises: list[str], bloques: list[str]) -> str:
     )
 
 
+_JOURS = ("lundi", "mardi", "mercredi", "jeudi", "vendredi", "samedi", "dimanche")
+
+
+def bloc_temporel(ref: date) -> str:
+    """Contexte temporel injecté au prompt : « aujourd'hui » = date de référence."""
+    lundi = ref + timedelta(days=(7 - ref.weekday()))
+    vendredi = lundi + timedelta(days=4)
+    return (
+        "\n\nCONTEXTE TEMPOREL DYNAMIQUE :\n"
+        "- Date de référence (« aujourd'hui », dernier jour de données) : "
+        f"{ref.strftime('%d/%m/%Y')} ({_JOURS[ref.weekday()]}) [{ref.isoformat()}].\n"
+        f"- Prochaine semaine ouvrée : du {lundi.isoformat()} au {vendredi.isoformat()}.\n"
+        "Utilise ces dates pour résoudre les expressions relatives de l'opérateur.\n"
+    )
+
+
+def _bloc_calibration() -> str:
+    if get_settings().divatex_calibre:
+        return ""
+    return "- Le rendement est ESTIMÉ (non calibré) : ajoute « (estimé) » après chaque valeur.\n"
+
+
 def call_model(state: AgentState, config: RunnableConfig | None = None) -> dict:
     allowed = _outils_autorises(config)
     if allowed is None:
@@ -89,16 +113,11 @@ def call_model(state: AgentState, config: RunnableConfig | None = None) -> dict:
         outils = [t for t in outils if t.name not in noms_navigation]
 
     model = get_chat_model().bind_tools(outils)
-    now = heure_usine()
-    today = now.date()
-    next_monday = today + timedelta(days=(7 - today.weekday()))
-    next_friday = next_monday + timedelta(days=4)
-    prompt = SYSTEM_PROMPT + (
-        "\n\nCONTEXTE TEMPOREL DYNAMIQUE (heure locale de l'usine, Africa/Tunis) :\n"
-        f"- Aujourd'hui : {today.isoformat()} ({today.strftime('%A')}).\n"
-        f"- Prochaine semaine ouvrée : du {next_monday.isoformat()} au {next_friday.isoformat()}.\n"
-        "Utilise ces dates pour résoudre les expressions relatives de l'opérateur.\n"
-    )
+    try:
+        ref = connexion.date_reference()
+    except connexion.DivatexIndisponible:
+        ref = heure_usine().date()  # repli : base injoignable, les outils le signaleront
+    prompt = SYSTEM_PROMPT + bloc_temporel(ref) + _bloc_calibration()
     if state.get("mode") == "voix":
         prompt += VOICE_PROMPT_ADDENDUM
     elif state.get("mode") == "whatsapp":
