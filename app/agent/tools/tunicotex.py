@@ -132,8 +132,9 @@ def situation_atelier(date: str | None = None) -> tuple[str, dict | None]:
     if not s.a_des_lectures:
         return _fin(f"Aucune production enregistrée le {_jjmmaaaa(jour)}.", jour), None
     texte = (
-        f"Atelier le {_jjmmaaaa(jour)} : {s.sortie} pièces sorties pour un objectif de "
-        f"{s.objectif} ({_pct(s.taux)}). Rendement moyen : {_rendement(s.rendement_moyen)}. "
+        f"Atelier le {_jjmmaaaa(jour)} : {s.sortie_avec_objectif} / {s.objectif} pièces "
+        f"des chaînes avec objectif — {_pct(s.taux)}. "
+        f"Sortie confection totale : {s.sortie}. Rendement moyen : {_rendement(s.rendement_moyen)}. "
         f"Chaînes sous objectif : {', '.join(s.lignes_sous_objectif) or 'aucune'}. "
         f"Chaînes au-dessus : {', '.join(s.lignes_au_dessus) or 'aucune'}. "
         f"OF en retard : {s.nb_of_en_retard}."
@@ -143,9 +144,10 @@ def situation_atelier(date: str | None = None) -> tuple[str, dict | None]:
         "kind": "kpi_tiles", "titre": "Situation de l'atelier",
         "date_reference": _jjmmaaaa(jour),
         "tuiles": [
-            _tuile("Sortie", s.sortie, "pièces"),
+            _tuile("Sortie (chaînes avec objectif)", s.sortie_avec_objectif, "pièces"),
             _tuile("Objectif", s.objectif, "pièces"),
             _tuile("Atteinte", _pct(s.taux), etat=etat_taux),
+            _tuile("Sortie confection totale", s.sortie, "pièces"),
             _tuile("Rendement", _rendement(s.rendement_moyen)),
             _tuile("OF en retard", s.nb_of_en_retard,
                    etat="alerte" if s.nb_of_en_retard else "ok"),

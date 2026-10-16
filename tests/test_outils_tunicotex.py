@@ -50,6 +50,8 @@ def test_situation_mentionne_date(divatex):
     txt, art = appeler(situation_atelier, {})
     assert "Données au 28/08/2026" in txt and art["kind"] == "kpi_tiles"
     assert art["date_reference"] == "28/08/2026" and art["tuiles"]
+    assert "30 / 502 pièces des chaînes avec objectif" in txt
+    assert "Sortie confection totale : 30" in txt
 
 
 def test_production_chaines(divatex):
