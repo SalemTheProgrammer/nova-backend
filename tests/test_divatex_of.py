@@ -97,3 +97,19 @@ def test_totaux_phase_finale_par_lots_de_100(divatex, capture_sql):
     assert len(lots) == 3
     assert totaux == {ID_OF_91294_1: 100, ID_OF_91294_2: 50}
     assert _totaux_phase_finale([]) == {}
+
+
+def test_of_de_ligne_ofs_scannes_ce_jour(divatex):
+    from app.integrations.divatex.of import of_de_ligne
+    from tests.divatex_fixtures import ID_LIGNE_CH1_L2, REF_DATE
+
+    assert {o.id for o in of_de_ligne(ID_LIGNE_CH1_L2, REF_DATE)} == {ID_OF_91294_1, ID_OF_91294_2}
+
+
+def test_of_de_ligne_vide_sans_lecture(divatex):
+    from datetime import date
+
+    from app.integrations.divatex.of import of_de_ligne
+    from tests.divatex_fixtures import ID_LIGNE_CH1_L2
+
+    assert of_de_ligne(ID_LIGNE_CH1_L2, date(2026, 8, 30)) == []

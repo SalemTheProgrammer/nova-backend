@@ -11,6 +11,7 @@ from app.api.routes import (
     documents,
     health,
     routes_voice,
+    tunicotex,
     whatsapp,
 )
 
@@ -22,5 +23,6 @@ api_router.include_router(audit.router)
 api_router.include_router(chat.router)
 api_router.include_router(documents.router)
 api_router.include_router(routes_voice.router)
+api_router.include_router(tunicotex.router)
 api_router.include_router(whatsapp.public_router)
 api_router.include_router(whatsapp.router)

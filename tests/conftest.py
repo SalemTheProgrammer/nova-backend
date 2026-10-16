@@ -48,3 +48,22 @@ def auth_client() -> TestClient:
 
 
 from tests.divatex_fixtures import capture_sql, divatex  # noqa: E402,F401
+
+
+@pytest.fixture
+def client_sans_outils() -> TestClient:
+    """Client authentifié par un utilisateur non administrateur sans aucun outil."""
+    app = create_app()
+
+    def _fake_user() -> Utilisateur:
+        return Utilisateur(
+            id=2,
+            telephone="+21600000001",
+            nom_complet="Opérateur Test",
+            is_admin=False,
+            actif=True,
+            outils_autorises=[],
+        )
+
+    app.dependency_overrides[get_current_user] = _fake_user
+    return TestClient(app)

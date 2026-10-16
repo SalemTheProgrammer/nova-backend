@@ -192,3 +192,12 @@ def avancement_of(of_id: int) -> AvancementOF | None:
         of=of, phases=phases, tailles=sorted(par_taille.items()),
         lignes=[codes[i] for i in ids_lignes if i in codes], derniere_lecture=derniere,
     )
+
+
+def of_de_ligne(ligne_id: int, jour: date) -> list[OFResume]:
+    """OF ayant au moins une lecture sur cette ligne ce jour-là."""
+    return charger_resumes(
+        "o.IDOFabrication IN (SELECT DISTINCT IDOFabrication FROM lectures "
+        "WHERE IDChaineMontage = :ligne AND Date = :jour)",
+        ligne=ligne_id, jour=jour.isoformat(),
+    )
