@@ -149,3 +149,20 @@ def test_categorie_requise(client_sans_outils, divatex):
 
 def test_cle_api_requise(client, divatex):
     assert client.get(f"{B}/atelier").status_code in (401, 403)
+
+
+@pytest.mark.parametrize(
+    "parametres",
+    [{"jour": 5}, {"jour": "pas-une-date"}, {"of_id": "x"}, {"of_id": 1.5}, {"horizon_jours": 0},
+     {"groupe_id": True}],
+)
+def test_envoyer_parametres_mal_formes_400(auth_client, divatex, monkeypatch, parametres):
+    envois = []
+    monkeypatch.setattr(
+        notify_service, "envoyer_whatsapp", lambda *a, **k: envois.append(a) or "ok"
+    )
+    r = auth_client.post(
+        f"{B}/rapports/R1/envoyer", headers=H,
+        json={"canal": "whatsapp", "destinataire": "+21612345678", "parametres": parametres},
+    )
+    assert r.status_code == 400 and envois == []

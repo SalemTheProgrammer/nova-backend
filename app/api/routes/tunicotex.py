@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from typing import TypeVar
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from pydantic import ValidationError
 
 from app.core.access import require_category
 from app.core.config import get_settings
@@ -23,6 +24,7 @@ from app.schemas.tunicotex import (
     LigneReference,
     OFResumeSchema,
     OFRisqueSchema,
+    ParametresRapportSchema,
     ProductionLigneSchema,
     ReferenceSchema,
     RendementOperateurSchema,
@@ -183,8 +185,13 @@ def rapport_pdf(
 def envoyer_rapport(type_: str, corps: EnvoiRapportRequete) -> EnvoiRapportReponse:
     type_ = _type_rapport(type_)
 
+    try:
+        valides = ParametresRapportSchema.model_validate(corps.parametres)
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail="Paramètres de rapport invalides.") from exc
+    params = tunicotex_pdf.ParametresRapport.from_dict(valides.model_dump(mode="json"))
+
     def _generer() -> tuple[str, bytes]:
-        params = tunicotex_pdf.ParametresRapport.from_dict(corps.parametres)
         return tunicotex_pdf.generer_rapport(type_, params)
 
     nom, pdf = _valeurs_valides(_generer)
@@ -203,7 +210,7 @@ def envoyer_rapport(type_: str, corps: EnvoiRapportRequete) -> EnvoiRapportRepon
             "type": type_,
             "canal": corps.canal,
             "destinataire": corps.destinataire,
-            "parametres": corps.parametres,
+            "parametres": valides.model_dump(mode="json", exclude_none=True),
         },
         source="web",
         thread_id=None,

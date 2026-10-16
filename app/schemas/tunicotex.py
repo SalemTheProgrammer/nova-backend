@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, StrictInt
 
 Nature = Literal["tricotage", "confection", "finition"]
 
@@ -167,6 +167,29 @@ class CommandeDetailSchema(_Modele):
     quantite: int
     ofs: list[OFResumeSchema]
     a_risque: bool
+
+
+def _date_iso_texte(valeur: Any) -> Any:
+    """Une date de rapport est un texte ISO : refuse nombres et booléens."""
+    if valeur is not None and not isinstance(valeur, str):
+        raise ValueError("date ISO (AAAA-MM-JJ) attendue")
+    return valeur
+
+
+DateIso = Annotated[date | None, BeforeValidator(_date_iso_texte)]
+
+
+class ParametresRapportSchema(BaseModel):
+    """Paramètres d'un rapport : miroir typé de `tunicotex_pdf.ParametresRapport`."""
+
+    jour: DateIso = None
+    du: DateIso = None
+    au: DateIso = None
+    groupe_id: StrictInt | None = None
+    ligne_id: StrictInt | None = None
+    of_id: StrictInt | None = None
+    client_id: StrictInt | None = None
+    horizon_jours: StrictInt | None = Field(default=None, ge=1, le=365)
 
 
 class EnvoiRapportRequete(BaseModel):
