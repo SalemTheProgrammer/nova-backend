@@ -240,3 +240,57 @@ def situation_atelier(jour: date) -> SituationAtelier:
         ]),
         a_des_lectures=a_lectures,
     )
+
+
+_PERIODE_MAX_JOURS = 31
+_TAILLE_LOT_OF = 100
+
+
+def pieces_par_phase(
+    du: date, au: date, *, of_id: int | None = None, client_id: int | None = None
+) -> list[tuple[date, int, int]]:
+    """Pièces par (jour, phase) sur la période, phases de production seulement.
+
+    Filtre d'abord sur ``Date`` (ou ``IDOFabrication`` + ``Date`` pour un OF) ;
+    avec ``client_id``, les OF du client sont résolus puis lus par lots.
+    """
+    if du > au:
+        raise ValueError("Période invalide.")
+    if (au - du).days + 1 > _PERIODE_MAX_JOURS:
+        raise ValueError("Période limitée à 31 jours.")
+    bornes = {"du": du.isoformat(), "au": au.isoformat()}
+    selection = (
+        "SELECT Date, IdPhase, SUM(Quantite) AS pieces FROM lectures "
+    )
+    groupe = " AND IdPhase > 0 GROUP BY Date, IdPhase"
+    if of_id is not None:
+        lots = [[of_id]]
+    elif client_id is not None:
+        ids = [
+            int(r["IDOFabrication"])
+            for r in requete(
+                "SELECT IDOFabrication FROM ofabrication WHERE IDClient = :client",
+                client=client_id,
+            )
+        ]
+        lots = [ids[i:i + _TAILLE_LOT_OF] for i in range(0, len(ids), _TAILLE_LOT_OF)]
+    else:
+        lots = [None]
+    cumul: dict[tuple[date, int], int] = defaultdict(int)
+    for lot in lots:
+        if lot is None:
+            lignes = requete(
+                selection + "WHERE Date BETWEEN :du AND :au" + groupe, **bornes
+            )
+        else:
+            marques = ", ".join(f":o{i}" for i in range(len(lot)))
+            params = {f"o{i}": v for i, v in enumerate(lot)}
+            lignes = requete(
+                selection
+                + f"WHERE IDOFabrication IN ({marques}) AND Date BETWEEN :du AND :au"
+                + groupe,
+                **bornes, **params,
+            )
+        for r in lignes:
+            cumul[(_en_date(r["Date"]), int(r["IdPhase"]))] += int(r["pieces"] or 0)
+    return [(j, p, n) for (j, p), n in sorted(cumul.items())]

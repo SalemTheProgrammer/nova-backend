@@ -7,6 +7,7 @@ import pytest
 
 from app.integrations.divatex.production import (
     courbe_horaire,
+    pieces_par_phase,
     production_lignes,
     situation_atelier,
     tendance,
@@ -83,3 +84,23 @@ def test_requetes_lectures_commencent_par_un_prefixe_indexe(capture_sql):
     for sql in capture_sql:
         if "FROM lectures" in sql:
             assert "Date = " in sql
+
+
+def test_pieces_par_phase_atelier(divatex):
+    r = pieces_par_phase(date(2026, 8, 27), JOUR)
+    assert (date(2026, 8, 28), 5, 30) in r
+    assert (date(2026, 8, 28), 1, 20) in r
+    assert all(p > 0 for _, p, _ in r)
+
+
+def test_pieces_par_phase_of_et_client(divatex):
+    of = pieces_par_phase(JOUR, JOUR, of_id=1)
+    assert (JOUR, 5, 15) in of and (JOUR, 12, 100) in of
+    client = pieces_par_phase(JOUR, JOUR, client_id=1)
+    assert (JOUR, 5, 30) in client and all(p != 1 for _, p, _ in client)
+    assert pieces_par_phase(JOUR, JOUR, client_id=999) == []
+
+
+def test_pieces_par_phase_periode_limitee(divatex):
+    with pytest.raises(ValueError, match="31 jours"):
+        pieces_par_phase(date(2026, 7, 1), date(2026, 8, 28))

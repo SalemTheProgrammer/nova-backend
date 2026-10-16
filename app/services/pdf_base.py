@@ -107,20 +107,23 @@ def table_paginable(
     entetes: list[str],
     rangees: list[list[str]],
     largeur: float = LARGEUR_UTILE,
+    poids: list[float] | None = None,
 ) -> list:
     """Section tabulaire qui peut s'étaler sur plusieurs pages.
 
     Le libellé est un titre au-dessus d'une grille classique : la grille se
     scinde proprement et réaffiche sa ligne d'en-têtes (`repeatRows=1`) sur
     chaque page. Passer `largeur=LARGEUR_UTILE_PAYSAGE` pour un document paysage.
+    `poids` répartit la largeur entre colonnes (égale par défaut).
     """
     if not rangees:
         rangees = [["---"] * len(entetes)]
     data = [[Paragraph(e, STYLE_CELL_B) for e in entetes]]
     for r in rangees:
         data.append([Paragraph(str(v), STYLE_CELL) for v in r])
-    largeur_col = largeur / len(entetes)
-    table = Table(data, colWidths=[largeur_col] * len(entetes), repeatRows=1)
+    poids = poids or [1.0] * len(entetes)
+    largeurs = [largeur * w / sum(poids) for w in poids]
+    table = Table(data, colWidths=largeurs, repeatRows=1)
     table.setStyle(
         TableStyle(
             [
