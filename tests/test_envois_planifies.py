@@ -1,6 +1,7 @@
 """Rapport du matin automatique et envois planifiés de rapports PDF."""
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 
@@ -63,15 +64,20 @@ def whatsapp(monkeypatch):
     return appels
 
 
-def test_bilan_auto_envoie_r1(divatex, whatsapp, monkeypatch):
-    monkeypatch.setenv("AUTO_BILAN_CANAL", "whatsapp")
-    monkeypatch.setenv("AUTO_BILAN_DESTINATAIRE", "+21612345678")
-    get_settings.cache_clear()
-    try:
-        scheduled_report_service._envoyer_bilan_auto("07:30")
-    finally:
-        monkeypatch.undo()
+@pytest.fixture
+def reglages(monkeypatch):
+    def appliquer(**valeurs):
+        for cle, valeur in valeurs.items():
+            monkeypatch.setenv(cle, valeur)
         get_settings.cache_clear()
+
+    yield appliquer
+    get_settings.cache_clear()  # monkeypatch restaure l'environnement après
+
+
+def test_bilan_auto_envoie_r1(divatex, whatsapp, reglages):
+    reglages(AUTO_BILAN_CANAL="whatsapp", AUTO_BILAN_DESTINATAIRE="+21612345678")
+    scheduled_report_service._envoyer_bilan_auto("07:30")
     assert len(whatsapp) == 1
     numero, legende, (nom, pdf) = whatsapp[0]
     assert numero == "+21612345678"
@@ -79,23 +85,16 @@ def test_bilan_auto_envoie_r1(divatex, whatsapp, monkeypatch):
     assert "28/08/2026" in legende and tunicotex_pdf.TITRES["R1"] in legende
 
 
-def test_bilan_auto_sans_destinataire_ou_diva_en_panne(whatsapp, monkeypatch):
-    monkeypatch.setenv("AUTO_BILAN_CANAL", "whatsapp")
-    monkeypatch.setenv("AUTO_BILAN_DESTINATAIRE", "")
-    get_settings.cache_clear()
-    try:
-        scheduled_report_service._envoyer_bilan_auto("07:30")  # ne plante pas
-        monkeypatch.setenv("AUTO_BILAN_DESTINATAIRE", "+21612345678")
-        get_settings.cache_clear()
+def test_bilan_auto_sans_destinataire_ou_diva_en_panne(whatsapp, reglages, monkeypatch):
+    reglages(AUTO_BILAN_CANAL="whatsapp", AUTO_BILAN_DESTINATAIRE="")
+    scheduled_report_service._envoyer_bilan_auto("07:30")  # ne plante pas
+    reglages(AUTO_BILAN_DESTINATAIRE="+21612345678")
 
-        def panne(*a, **k):
-            raise connexion.DivatexIndisponible()
+    def panne(*a, **k):
+        raise connexion.DivatexIndisponible()
 
-        monkeypatch.setattr(tunicotex_pdf, "generer_rapport", panne)
-        scheduled_report_service._envoyer_bilan_auto("07:30")  # ne plante pas
-    finally:
-        monkeypatch.undo()
-        get_settings.cache_clear()
+    monkeypatch.setattr(tunicotex_pdf, "generer_rapport", panne)
+    scheduled_report_service._envoyer_bilan_auto("07:30")  # ne plante pas
     assert whatsapp == []
 
 
@@ -158,7 +157,7 @@ def test_planifier_rapport_confirmation_et_stockage(divatex, nova_db, monkeypatc
         envoi = db.execute(select(EnvoiPlanifie)).scalar_one()
     assert envoi.type_envoi == TYPE_RAPPORT and envoi.rapport == "R1"
     assert envoi.destinataire == "+21612345678"
-    params = tunicotex_pdf.ParametresRapport.from_dict(__import__("json").loads(envoi.parametres_json))
+    params = tunicotex_pdf.ParametresRapport.from_dict(json.loads(envoi.parametres_json))
     assert params.ligne_id == 10 and params.jour.isoformat() == "2026-08-27"
     confirmation_gate._PROPOSITIONS.clear()
 
@@ -170,3 +169,102 @@ def test_planifier_rapport_entrees_invalides(divatex, nova_db):
     assert art is None and "OF" in txt
     txt, art = _planifier("i5", False, rapport=None)
     assert art is None and "rapport" in txt.lower()
+
+
+def _ajouter(nova_db, **kw):
+    base = dict(
+        type_envoi=TYPE_RAPPORT, canal="whatsapp", destinataire="+21612345678",
+        rapport="R1", parametres_json="{}",
+        execute_at=datetime.now() - timedelta(seconds=5),
+    )
+    with nova_db() as db:
+        envoi = EnvoiPlanifie(**{**base, **kw})
+        db.add(envoi)
+        db.flush()
+        return envoi.id
+
+
+def _rendre_du(nova_db):
+    with nova_db() as db:
+        for e in db.execute(select(EnvoiPlanifie)).scalars():
+            if e.statut == "EN_ATTENTE":
+                e.execute_at = datetime.now() - timedelta(seconds=1)
+
+
+def _etat(nova_db, envoi_id):
+    with nova_db() as db:
+        return db.get(EnvoiPlanifie, envoi_id)
+
+
+def test_exception_inattendue_isolee(divatex, nova_db, whatsapp, monkeypatch):
+    mauvais = _ajouter(
+        nova_db, rapport="R2", execute_at=datetime.now() - timedelta(minutes=2)
+    )
+    bon = _ajouter(nova_db)
+    original = tunicotex_pdf.generer_rapport
+
+    def generer(rapport, params):
+        if rapport == "R2":
+            raise KeyError("boom")  # hors AppError
+        return original(rapport, params)
+
+    monkeypatch.setattr(tunicotex_pdf, "generer_rapport", generer)
+    scheduler_service._tick()
+    _rendre_du(nova_db)
+    scheduler_service._tick()
+    assert len(whatsapp) == 1  # le bon : exactement une fois sur deux ticks
+    assert _etat(nova_db, bon).statut == STATUT_ENVOYE
+    mal = _etat(nova_db, mauvais)
+    assert mal.statut == "EN_ATTENTE" and mal.tentatives == 2
+
+
+def test_exception_inattendue_incremente_puis_echec(divatex, nova_db, whatsapp, monkeypatch):
+    envoi_id = _ajouter(nova_db)
+
+    def casse(*a, **k):
+        raise KeyError("boom")
+
+    monkeypatch.setattr(tunicotex_pdf, "generer_rapport", casse)
+    for attendu in (1, 2, 3):
+        scheduler_service._tick()
+        assert _etat(nova_db, envoi_id).tentatives == attendu
+        _rendre_du(nova_db)
+    envoi = _etat(nova_db, envoi_id)
+    assert envoi.statut == STATUT_ECHEC and "KeyError" in envoi.resultat
+    assert whatsapp == []
+
+
+def test_rapport_diva_en_panne_reessaye_puis_echec(nova_db, whatsapp, monkeypatch):
+    envoi_id = _ajouter(nova_db)
+
+    def panne(*a, **k):
+        raise connexion.DivatexIndisponible()
+
+    monkeypatch.setattr(tunicotex_pdf, "generer_rapport", panne)
+    for attendu in (1, 2):
+        scheduler_service._tick()
+        envoi = _etat(nova_db, envoi_id)
+        assert envoi.statut == "EN_ATTENTE" and envoi.tentatives == attendu
+        _rendre_du(nova_db)
+    scheduler_service._tick()
+    envoi = _etat(nova_db, envoi_id)
+    assert envoi.statut == STATUT_ECHEC and envoi.tentatives == 3
+    assert "Base DIVA injoignable" in envoi.resultat and whatsapp == []
+
+
+@pytest.mark.parametrize(
+    "kw",
+    [
+        {"rapport": "R9"},
+        {"rapport": None},
+        {"rapport": "R5"},  # pas d'OF
+        {"parametres_json": "{pas du json"},
+        {"parametres_json": '{"jour": "xx"}'},
+    ],
+)
+def test_entree_invalide_echec_sans_reessai(divatex, nova_db, whatsapp, kw):
+    envoi_id = _ajouter(nova_db, **kw)
+    scheduler_service._tick()
+    envoi = _etat(nova_db, envoi_id)
+    assert envoi.statut == STATUT_ECHEC and envoi.tentatives == 0
+    assert envoi.resultat.startswith("Non envoyé") and whatsapp == []

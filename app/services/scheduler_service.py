@@ -22,8 +22,8 @@ from sqlalchemy.orm import Session
 
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
-from app.integrations.divatex import connexion
 from app.db.session import session_scope
+from app.integrations.divatex import connexion
 from app.models import DocumentRag, EnvoiPlanifie
 from app.models.envoi_planifie import (
     STATUT_ANNULE,
@@ -46,6 +46,10 @@ RETARD_MAX = timedelta(minutes=30)
 DELAI_REESSAI = timedelta(seconds=60)
 TENTATIVES_MAX = 3
 TYPES_CONNUS = (TYPE_DOCUMENT, TYPE_MESSAGE, TYPE_RAPPORT)
+
+
+class EchecDefinitif(AppError):
+    """Entrée invalide (rapport inconnu, paramètres illisibles…) : inutile de réessayer."""
 
 
 def programmer(
@@ -125,10 +129,14 @@ def envoyer_rapport_pdf(
     Légende / objet : « <titre> — Données au JJ/MM/AAAA ». Lève AppError
     (dont `DivatexIndisponible`) en cas d'échec.
     """
+    if rapport not in tunicotex_pdf.TITRES:
+        raise EchecDefinitif(f"Rapport inconnu : {rapport!r}.")
+    if rapport == "R5" and params.of_id is None:
+        raise EchecDefinitif("La fiche OF demande un OF : paramètres incomplets.")
     try:
         nom_fichier, pdf = tunicotex_pdf.generer_rapport(rapport, params)
     except ValueError as exc:
-        raise AppError(str(exc)) from exc
+        raise EchecDefinitif(str(exc)) from exc
     sujet = f"{tunicotex_pdf.TITRES[rapport]} — Données au {connexion.date_reference():%d/%m/%Y}"
     return _envoyer(canal, destinataire, sujet, sujet, (nom_fichier, pdf))
 
@@ -154,8 +162,8 @@ def _executer(db: Session, envoi: EnvoiPlanifie) -> str:
             params = tunicotex_pdf.ParametresRapport.from_dict(
                 json.loads(envoi.parametres_json or "{}")
             )
-        except (ValueError, TypeError) as exc:
-            raise AppError(f"Paramètres du rapport illisibles : {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - JSON/valeurs corrompus : définitif
+            raise EchecDefinitif(f"Paramètres du rapport illisibles : {exc}") from exc
         return envoyer_rapport_pdf(envoi.canal, envoi.destinataire, envoi.rapport or "", params)
 
     raise AppError(f"Type d'envoi inconnu : {envoi.type_envoi!r}")
@@ -180,21 +188,33 @@ def _traiter_envoi_du(db: Session, envoi: EnvoiPlanifie, maintenant: datetime) -
         return
     try:
         resultat = _executer(db, envoi)
-    except AppError as exc:
+    except EchecDefinitif as exc:
+        envoi.statut = STATUT_ECHEC
+        envoi.executed_at = maintenant
+        envoi.resultat = f"Non envoyé : {exc.message}"
+        logger.error("envoi_planifie_echec", envoi_id=envoi.id, error=exc.message)
+        return
+    except Exception as exc:  # noqa: BLE001 - un envoi ne doit jamais bloquer les autres
+        message = exc.message if isinstance(exc, AppError) else f"{type(exc).__name__}: {exc}"
+        if not isinstance(exc, AppError):
+            logger.exception("envoi_planifie_erreur_inattendue", envoi_id=envoi.id)
+            db.rollback()  # session éventuellement invalide (erreur SQL)
         envoi.tentatives += 1
         if envoi.tentatives >= TENTATIVES_MAX:
             envoi.statut = STATUT_ECHEC
             envoi.executed_at = maintenant
-            envoi.resultat = f"Échec après {envoi.tentatives} tentatives : {exc.message}"
-            logger.error("envoi_planifie_echec", envoi_id=envoi.id, error=exc.message)
+            envoi.resultat = f"Échec après {envoi.tentatives} tentatives : {message}"[:1000]
+            logger.error("envoi_planifie_echec", envoi_id=envoi.id, error=message)
         else:
             envoi.execute_at = maintenant + DELAI_REESSAI
-            envoi.resultat = f"Tentative {envoi.tentatives} échouée ({exc.message}), nouvel essai."
+            envoi.resultat = f"Tentative {envoi.tentatives} échouée ({message}), nouvel essai."[
+                :1000
+            ]
             logger.warning(
                 "envoi_planifie_reessai",
                 envoi_id=envoi.id,
                 tentative=envoi.tentatives,
-                error=exc.message,
+                error=message,
             )
         return
     envoi.statut = STATUT_ENVOYE
@@ -217,7 +237,10 @@ def _tick() -> None:
             ).scalars()
         )
         for envoi in dus:
+            # Un commit par envoi : l'échec d'un envoi ne défait jamais le statut
+            # ENVOYE d'un autre (pas de double envoi au tick suivant).
             _traiter_envoi_du(db, envoi, maintenant)
+            db.commit()
 
 
 async def boucle_envois_planifies(intervalle_s: float = INTERVALLE_VERIF_S) -> None:
