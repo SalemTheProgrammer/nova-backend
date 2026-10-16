@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
 from app.core.config import get_settings
-from app.integrations.divatex import kpi
+from app.integrations.divatex import commandes, kpi
 from app.integrations.divatex.connexion import requete
 from app.integrations.divatex.referentiel import Ligne, lister_lignes
 
@@ -235,6 +235,8 @@ def situation_atelier(jour: date) -> SituationAtelier:
         ),
         lignes_sous_objectif=[l.ligne.code for l in avec_taux if l.taux < 1],
         lignes_au_dessus=[l.ligne.code for l in avec_taux if l.taux >= 1],
-        nb_of_en_retard=0,  # branché à la tâche 8 (commandes.of_a_risque)
+        nb_of_en_retard=len([
+            r for r in commandes.of_a_risque(jour) if r.statut == "en_retard"
+        ]),
         a_des_lectures=a_lectures,
     )

@@ -156,9 +156,13 @@ def _operateur(r: dict) -> Operateur:
     )
 
 
+def echapper_like(mot: str) -> str:
+    """Échappe ``!``, ``%`` et ``_`` pour un ``LIKE ... ESCAPE '!'``."""
+    return mot.replace("!", "!!").replace("%", "!%").replace("_", "!_")
+
+
 def _motif_like(mot: str) -> str:
-    echappe = mot.replace("!", "!!").replace("%", "!%").replace("_", "!_")
-    return f"%{echappe}%"
+    return f"%{echapper_like(mot)}%"
 
 
 def rechercher_operateurs(texte: str, limite: int = 10) -> list[Operateur]:
