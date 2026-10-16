@@ -18,6 +18,8 @@ from app.integrations.divatex import of as ofs
 from app.integrations.divatex import operateurs as ops
 from app.integrations.divatex import production as prod
 from app.integrations.divatex import referentiel as ref
+from app.services import tunicotex_pdf
+from app.services.tunicotex_pdf import ParametresRapport
 
 _MAX_CODES = 15
 _NBSP = " "
@@ -73,7 +75,14 @@ def _tuile(libelle: str, valeur, unite: str | None = None, etat: str = "neutre",
 
 
 class _ErreurSaisie(Exception):
-    """Saisie utilisateur invalide (date, période) : message affichable tel quel."""
+    """Saisie utilisateur invalide (date, période) : message affichable tel quel.
+
+    `artifact` accompagne parfois le message (liste d'OF à départager).
+    """
+
+    def __init__(self, message: str, artifact: dict | None = None) -> None:
+        super().__init__(message)
+        self.artifact = artifact
 
 
 def _saisie(fonction, *args, **kwargs):
@@ -98,7 +107,7 @@ def _hors_service(fonction):
         except connexion.DivatexIndisponible:
             return "Base DIVA injoignable.", None
         except _ErreurSaisie as exc:
-            return str(exc), None
+            return str(exc), exc.artifact
 
     return enveloppe
 
@@ -464,6 +473,96 @@ def consulter_commande(numero: str) -> tuple[str, dict | None]:
     return _fin(texte, jour), table
 
 
+# --- rapports PDF ------------------------------------------------------------
+
+
+def resoudre_parametres_rapport(
+    type_: str,
+    date: str | None = None,
+    du: str | None = None,
+    au: str | None = None,
+    groupe: str | None = None,
+    chaine: str | None = None,
+    of: str | None = None,
+    horizon_jours: int | None = None,
+) -> ParametresRapport:
+    """Valide un rapport demandé et résout les noms (chaîne, groupe, OF, dates) en ids.
+
+    Lève `_ErreurSaisie` (message affichable, éventuellement avec la liste d'OF à
+    départager) ; n'appelle pas le générateur PDF.
+    """
+    if type_ not in tunicotex_pdf.TITRES:
+        valides = ", ".join(f"{k} ({v})" for k, v in tunicotex_pdf.TITRES.items())
+        raise _ErreurSaisie(f"Rapport inconnu : {type_}. Rapports disponibles : {valides}.")
+    jour_ref = connexion.date_reference()
+    ligne_id = groupe_id = of_id = None
+    if chaine:
+        ligne = ref.trouver_ligne(chaine)
+        if ligne is None:
+            raise _ErreurSaisie(_chaine_inconnue(chaine))
+        ligne_id = ligne.id
+    if groupe:
+        g = ref.trouver_groupe(groupe)
+        if g is None:
+            raise _ErreurSaisie(_groupe_inconnu(groupe, jour_ref))
+        groupe_id = g.id
+    if of:
+        resultats = ofs.rechercher_of(of)
+        if not resultats:
+            raise _ErreurSaisie(_fin(f"Aucun OF trouvé pour « {of} ».", jour_ref))
+        if len(resultats) > 1:
+            liste = ", ".join(o.numero for o in resultats)
+            raise _ErreurSaisie(
+                _fin(f"Plusieurs OF correspondent à « {of} » : {liste}. Précisez lequel.",
+                     jour_ref),
+                _table_ofs(f"OF — {of}", jour_ref, resultats),
+            )
+        of_id = resultats[0].id
+    elif type_ == "R5":
+        raise _ErreurSaisie("La fiche OF demande un OF : précisez son numéro.")
+    horizon = 7 if horizon_jours is None else horizon_jours
+    if not 1 <= horizon <= 365:
+        raise _ErreurSaisie("L'horizon doit être compris entre 1 et 365 jours.")
+    return ParametresRapport(
+        jour=_saisie(resoudre_jour, date, jour_ref) if date else None,
+        du=_saisie(resoudre_jour, du, jour_ref) if du else None,
+        au=_saisie(resoudre_jour, au, jour_ref) if au else None,
+        groupe_id=groupe_id, ligne_id=ligne_id, of_id=of_id, horizon_jours=horizon,
+    )
+
+
+@tool(response_format="content_and_artifact")
+@_hors_service
+def rapport_pdf(
+    type: str,  # noqa: A002
+    date: str | None = None,
+    du: str | None = None,
+    au: str | None = None,
+    groupe: str | None = None,
+    chaine: str | None = None,
+    of: str | None = None,
+    horizon_jours: int | None = None,
+) -> tuple[str, dict | None]:
+    """Prépare un rapport PDF Tunicotex pour l'opérateur qui le demande (il le reçoit
+    en pièce jointe : sur WhatsApp comme document, sur le web en téléchargement).
+    `type` : R1 fiche de production journalière (`date`, `groupe`, `chaine`),
+    R2 suivi des phases par jour (`du`, `au`), R3 rendement opérateurs (`du`, `au`,
+    `chaine`, `groupe`), R4 commandes à risque (`horizon_jours`), R5 fiche OF (`of`
+    obligatoire). Dates : « hier », « 26/08 », « JJ/MM/AAAA ». Sert à « envoie-moi /
+    donne-moi la fiche de production en PDF ». Pour l'envoyer à QUELQU'UN D'AUTRE,
+    utilise `envoyer_rapport`.
+    """
+    jour = connexion.date_reference()
+    params = resoudre_parametres_rapport(type, date, du, au, groupe, chaine, of, horizon_jours)
+    nom_fichier, _pdf = _saisie(tunicotex_pdf.generer_rapport, type, params)
+    titre = tunicotex_pdf.TITRES[type]
+    artifact = {
+        "kind": "document", "rapport": type, "titre": titre,
+        "nom_fichier": nom_fichier, "parametres": params.to_dict(),
+    }
+    return _fin(f"📄 {titre} prêt.", jour), artifact
+
+
 TUNICOTEX_TOOLS = [
     situation_atelier,
     production_chaines,
@@ -474,4 +573,5 @@ TUNICOTEX_TOOLS = [
     fiche_operateur,
     commandes_a_risque,
     consulter_commande,
+    rapport_pdf,
 ]

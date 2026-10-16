@@ -12,9 +12,11 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
 from app.agent.tools import confirmation_gate
+from app.agent.tools.tunicotex import _ErreurSaisie, resoudre_parametres_rapport
 from app.core.exceptions import AppError
 from app.db.session import session_scope
-from app.services import document_files, notify_service
+from app.integrations.divatex import connexion
+from app.services import document_files, notify_service, tunicotex_pdf
 
 CONFIRMATION_REQUISE = (
     "Confirmation requise : rappelez le destinataire et le canal à l'opérateur et "
@@ -142,8 +144,75 @@ def envoyer_document(
     )
 
 
+@tool(response_format="content_and_artifact")
+def envoyer_rapport(
+    rapport: str,
+    canal: str,
+    destinataire: str,
+    confirmation: bool,
+    date: str | None = None,
+    du: str | None = None,
+    au: str | None = None,
+    groupe: str | None = None,
+    chaine: str | None = None,
+    of: str | None = None,
+    horizon_jours: int | None = None,
+    *,
+    config: RunnableConfig,
+) -> tuple[str, dict | None]:
+    """ENVOIE un rapport PDF Tunicotex à QUELQU'UN D'AUTRE (ou à une adresse) par
+    `canal` : "email" ou "whatsapp" (numéro, ex. +216…). `rapport` : R1 fiche de
+    production journalière, R2 suivi des phases, R3 rendement opérateurs, R4
+    commandes à risque, R5 fiche OF (`of` obligatoire). Mêmes paramètres que
+    `rapport_pdf` (`date`, `du`, `au`, `groupe`, `chaine`, `of`, `horizon_jours`).
+
+    Pour « envoie-moi le rapport » (à l'opérateur lui-même), utilise `rapport_pdf`.
+    ACTION SORTANTE : accord explicite de l'opérateur requis (récapitulez rapport +
+    canal + destinataire) avant de rappeler avec confirmation=true.
+    """
+    if canal not in CANAUX:
+        return f"Canal invalide : {canal!r}. Utilisez \"email\" ou \"whatsapp\".", None
+    destinataire = _destinataire_canonique(canal, destinataire)
+    try:
+        params = resoudre_parametres_rapport(
+            rapport, date, du, au, groupe, chaine, of, horizon_jours
+        )
+    except _ErreurSaisie as exc:
+        return str(exc), exc.artifact
+    except connexion.DivatexIndisponible:
+        return "Base DIVA injoignable.", None
+    titre = tunicotex_pdf.TITRES[rapport]
+    libelle = f"envoyer le rapport « {titre} » par {canal} à {destinataire}"
+    if not confirmation_gate.evaluer(
+        config,
+        "envoyer_rapport",
+        {
+            "rapport": rapport, "canal": canal, "destinataire": destinataire,
+            "parametres": params.to_dict(),
+        },
+        confirmation,
+    ):
+        return _demande_confirmation(libelle)
+    try:
+        nom_fichier, pdf = tunicotex_pdf.generer_rapport(rapport, params)
+    except connexion.DivatexIndisponible:
+        return "Base DIVA injoignable.", None
+    except ValueError as exc:
+        return f"❌ {exc}", None
+    sujet = f"{titre} — Tunicotex"
+    corps = f"{sujet}\nTransmis par Nova."
+    try:
+        resultat = _envoyer(canal, destinataire, sujet, corps, document=(nom_fichier, pdf))
+    except AppError as exc:
+        return f"❌ {exc.message}", None
+    return (
+        f"✅ {resultat} Pièce jointe : {nom_fichier} (« {titre} »).",
+        _action_executee(libelle),
+    )
+
+
 def _action_executee(libelle: str) -> dict:
     return {"kind": "action_executee", "libelle": libelle}
 
 
-NOTIFY_TOOLS = [envoyer_message, envoyer_document]
+NOTIFY_TOOLS = [envoyer_message, envoyer_document, envoyer_rapport]

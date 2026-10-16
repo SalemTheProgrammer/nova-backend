@@ -31,7 +31,8 @@ from app.core.logging import get_logger
 from app.core.security import require_api_key
 from app.db.session import session_scope
 from app.models.utilisateur import Utilisateur
-from app.services import auth_service, chart_image_service
+from app.schemas.tunicotex import ParametresRapportSchema
+from app.services import auth_service, chart_image_service, tunicotex_pdf
 from app.services.notify_service import WHATSAPP_MAX_CHARS, normaliser_numero
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"], dependencies=[Depends(require_api_key)])
@@ -181,6 +182,14 @@ class WhatsAppImage(BaseModel):
     caption: str | None = None
 
 
+class WhatsAppDocument(BaseModel):
+    """Document PDF (rapport Tunicotex) à envoyer dans la conversation."""
+
+    filename: str
+    base64: str
+    caption: str | None = None
+
+
 class WhatsAppReply(BaseModel):
     reply: str
     # Rempli quand l'entrée était un vocal : la réponse repart aussi en note
@@ -188,6 +197,8 @@ class WhatsAppReply(BaseModel):
     reply_audio_base64: str | None = None
     # Graphiques/jauges générés pendant ce tour, rendus en PNG côté backend.
     reply_images: list[WhatsAppImage] = []
+    # Rapports PDF demandés pendant ce tour, regénérés côté backend.
+    reply_documents: list[WhatsAppDocument] = []
 
 
 def formater_pour_whatsapp(texte: str) -> str:
@@ -361,7 +372,8 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
         message, thread_id=f"wa:{e164}", mode="whatsapp", outils_autorises=outils_autorises
     )
     images = await asyncio.to_thread(_rendre_artifacts_en_images, artifacts, e164)
-    return await _reponse(reponse, entree_vocale, e164, images)
+    documents = await asyncio.to_thread(_rendre_documents, artifacts, e164)
+    return await _reponse(reponse, entree_vocale, e164, images, documents)
 
 
 def _rendre_artifacts_en_images(artifacts: list[dict], e164: str) -> list[WhatsAppImage]:
@@ -397,8 +409,35 @@ def _rendre_artifacts_en_images(artifacts: list[dict], e164: str) -> list[WhatsA
     return images
 
 
+def _rendre_documents(artifacts: list[dict], e164: str = "") -> list[WhatsAppDocument]:
+    """Artifacts `document` du tour → PDF regénérés (l'artifact ne porte pas d'octets)."""
+    documents: list[WhatsAppDocument] = []
+    for artifact in artifacts:
+        if artifact.get("kind") != "document":
+            continue
+        try:
+            valides = ParametresRapportSchema.model_validate(artifact.get("parametres") or {})
+            params = tunicotex_pdf.ParametresRapport.from_dict(valides.model_dump(mode="json"))
+            nom, pdf = tunicotex_pdf.generer_rapport(artifact["rapport"], params)
+        except Exception:  # noqa: BLE001
+            logger.exception("whatsapp_rendu_document_failed", numero=e164)
+            continue
+        documents.append(
+            WhatsAppDocument(
+                filename=nom,
+                base64=base64.b64encode(pdf).decode("ascii"),
+                caption=artifact.get("titre"),
+            )
+        )
+    return documents
+
+
 async def _reponse(
-    texte: str, entree_vocale: bool, e164: str, images: list[WhatsAppImage]
+    texte: str,
+    entree_vocale: bool,
+    e164: str,
+    images: list[WhatsAppImage],
+    documents: list[WhatsAppDocument] | None = None,
 ) -> WhatsAppReply:
     """Formate la réponse ; si l'entrée était un vocal, ajoute la version audio."""
     reply = formater_pour_whatsapp(texte)
@@ -409,4 +448,9 @@ async def _reponse(
             audio_b64 = base64.b64encode(audio).decode("ascii")
         except Exception:  # noqa: BLE001
             logger.warning("whatsapp_tts_failed", numero=e164)
-    return WhatsAppReply(reply=reply, reply_audio_base64=audio_b64, reply_images=images)
+    return WhatsAppReply(
+        reply=reply,
+        reply_audio_base64=audio_b64,
+        reply_images=images,
+        reply_documents=documents or [],
+    )

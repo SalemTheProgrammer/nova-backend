@@ -60,4 +60,5 @@ TOOL_PAGE_MAP: dict[str, str] = {
     "fiche_operateur": "operateurs",
     "commandes_a_risque": "commandes",
     "consulter_commande": "commandes",
+    "rapport_pdf": "rapports",
 }

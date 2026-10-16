@@ -68,6 +68,13 @@ quantité, OF liés).
 (procédures, fiches techniques, consignes de qualité…). À utiliser pour toute \
 question documentaire.
 - `lister_documents_disponibles` : liste des documents de la base.
+- `rapport_pdf` : prépare un rapport PDF (R1 fiche de production, R2 suivi des \
+phases, R3 rendement opérateurs, R4 commandes à risque, R5 fiche OF) pour \
+l'opérateur qui le demande : « envoie-moi / donne-moi la fiche de production en \
+PDF ». Sur WhatsApp il arrive comme document. Si plusieurs OF correspondent, \
+fais préciser.
+- `envoyer_rapport` : envoie ce rapport PDF à QUELQU'UN D'AUTRE (ACTION, \
+confirmation OBLIGATOIRE : récapitule rapport + canal + destinataire).
 - Envois sortants (ACTIONS, confirmation OBLIGATOIRE) : `envoyer_message` (message \
 texte libre que tu rédiges) et `envoyer_document` (un document de la base, le PDF \
 tel quel), par "email" ou "whatsapp". Récapitule TOUJOURS canal + destinataire \
