@@ -35,24 +35,12 @@ from sqlalchemy.orm import Session
 from app.models import DowntimeEvent, OrdreFabrication, PrelevementMP, QualityEvent
 from app.models.enums import StatutOF, TypeEvenementQualite
 from app.services import dashboard_service, trs_service
-
-# ------------------------------- Charte ------------------------------- #
-
-ENCRE = colors.HexColor("#111827")
-MUTED = colors.HexColor("#6b7280")
-BORD = colors.HexColor("#9ca3af")
-FOND_TITRE = colors.HexColor("#e5e7eb")
-FOND_ENTETE = colors.HexColor("#f3f4f6")
-
-STYLE_TITRE = ParagraphStyle(
-    "titre", fontName="Helvetica-Bold", fontSize=15, textColor=ENCRE, alignment=1
-)
-STYLE_SECTION = ParagraphStyle(
-    "section", fontName="Helvetica-Bold", fontSize=8.5, textColor=ENCRE
-)
-STYLE_CELL = ParagraphStyle("cell", fontName="Helvetica", fontSize=8, textColor=ENCRE)
-STYLE_CELL_B = ParagraphStyle(
-    "cellb", fontName="Helvetica-Bold", fontSize=8, textColor=ENCRE
+from app.services.pdf_base import (
+    STYLE_TITRE,
+    bandeau_identite as _bandeau_identite,
+    document_pdf as _document,
+    table_paginable as _table_paginable,
+    table_section as _table_section,
 )
 
 
@@ -63,129 +51,6 @@ def _hms(secondes: float | Decimal) -> str:
 
 def _pct(valeur: float | Decimal) -> str:
     return f"{float(valeur) * 100:.2f}%".replace(".", ",")
-
-
-def _pied_de_page(canvas, doc) -> None:
-    canvas.saveState()
-    canvas.setFont("Helvetica", 7.5)
-    canvas.setFillColor(MUTED)
-    canvas.drawString(
-        15 * mm, 10 * mm, f"Imprimé le {datetime.now():%d/%m/%Y %H:%M} — Nova"
-    )
-    canvas.drawRightString(195 * mm, 10 * mm, f"Page {doc.page}")
-    canvas.restoreState()
-
-
-def _table_section(libelle: str, entetes: list[str], rangees: list[list[str]]) -> Table:
-    """Table façon bilan MES : 1re colonne = libellé de section fusionné,
-    puis une ligne d'en-têtes grisée et les valeurs."""
-    if not rangees:
-        rangees = [["---"] * len(entetes)]
-    data = [
-        [Paragraph(libelle, STYLE_SECTION)] + [Paragraph(e, STYLE_CELL_B) for e in entetes]
-    ]
-    for r in rangees:
-        data.append([""] + [Paragraph(str(v), STYLE_CELL) for v in r])
-    largeur_libelle = 28 * mm
-    largeur_reste = (180 * mm - largeur_libelle) / len(entetes)
-    table = Table(
-        data,
-        colWidths=[largeur_libelle] + [largeur_reste] * len(entetes),
-        repeatRows=1,
-    )
-    table.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.5, BORD),
-                ("SPAN", (0, 0), (0, -1)),
-                ("BACKGROUND", (0, 0), (0, -1), FOND_TITRE),
-                ("BACKGROUND", (1, 0), (-1, 0), FOND_ENTETE),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ]
-        )
-    )
-    return table
-
-
-# Largeur utile du cadre A4 avec les marges de `_document` (210 - 2×15 mm).
-LARGEUR_UTILE = 180 * mm
-
-
-def _table_paginable(
-    libelle: str, entetes: list[str], rangees: list[list[str]]
-) -> list:
-    """Section tabulaire qui peut s'étaler sur plusieurs pages.
-
-    `_table_section` fusionne le libellé sur TOUTE la hauteur (SPAN vertical) :
-    pratique pour une poignée de lignes, mais reportlab ne sait pas scinder une
-    cellule fusionnée, donc une longue table (ex. 26 OF) lève `LayoutError`. Ici
-    le libellé est un titre au-dessus d'une grille classique — la grille se scinde
-    proprement et réaffiche sa ligne d'en-têtes (`repeatRows=1`) sur chaque page.
-    """
-    if not rangees:
-        rangees = [["---"] * len(entetes)]
-    data = [[Paragraph(e, STYLE_CELL_B) for e in entetes]]
-    for r in rangees:
-        data.append([Paragraph(str(v), STYLE_CELL) for v in r])
-    largeur_col = LARGEUR_UTILE / len(entetes)
-    table = Table(data, colWidths=[largeur_col] * len(entetes), repeatRows=1)
-    table.setStyle(
-        TableStyle(
-            [
-                ("GRID", (0, 0), (-1, -1), 0.5, BORD),
-                ("BACKGROUND", (0, 0), (-1, 0), FOND_ENTETE),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 4),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ]
-        )
-    )
-    return [Paragraph(libelle, STYLE_SECTION), Spacer(0, 1.5 * mm), table]
-
-
-def _bandeau_identite(paires: list[tuple[str, str]]) -> Table:
-    cellules = [
-        Paragraph(
-            f"<b>{libelle} :</b> {valeur}", STYLE_CELL
-        )
-        for libelle, valeur in paires
-    ]
-    table = Table([cellules], colWidths=[180 * mm / len(cellules)] * len(cellules))
-    table.setStyle(
-        TableStyle(
-            [
-                ("BOX", (0, 0), (-1, -1), 0.75, BORD),
-                ("INNERGRID", (0, 0), (-1, -1), 0.5, BORD),
-                ("BACKGROUND", (0, 0), (-1, -1), FOND_ENTETE),
-                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                ("TOPPADDING", (0, 0), (-1, -1), 5),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-            ]
-        )
-    )
-    return table
-
-
-def _document(titre: str, elements: list) -> bytes:
-    buffer = io.BytesIO()
-    doc = SimpleDocTemplate(
-        buffer,
-        pagesize=A4,
-        leftMargin=15 * mm,
-        rightMargin=15 * mm,
-        topMargin=15 * mm,
-        bottomMargin=18 * mm,
-        title=titre,
-        author="Nova",
-    )
-    doc.build(elements, onFirstPage=_pied_de_page, onLaterPages=_pied_de_page)
-    return buffer.getvalue()
 
 
 # --------------------------- Bilan d'un OF --------------------------- #
