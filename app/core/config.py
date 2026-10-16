@@ -34,6 +34,18 @@ class Settings(BaseSettings):
     # base SQLite, sinon ./data/nova_chat_history.db (voir core/paths.py).
     chat_history_db_path: str = ""
 
+    # Divatex (base DIVA du client, accès en lecture seule)
+    divatex_url: str = ""
+    divatex_statement_timeout_s: int = 15
+    divatex_cache_ttl_s: int = 60
+    # "auto" = date de la dernière lecture, "today" = aujourd'hui, ou AAAA-MM-JJ.
+    divatex_date_reference: str = "auto"
+    divatex_temps_facteur: float = 1 / 60
+    divatex_appliquer_majoration: bool = True
+    divatex_duree_poste_min: int = 480
+    divatex_phase_finale: int = 12
+    divatex_calibre: bool = False
+
     # Security
     # NoDecode: keep the raw env string so `_split_csv` parses the CSV
     # (otherwise pydantic-settings tries to JSON-decode the list first).
