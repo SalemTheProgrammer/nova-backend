@@ -62,7 +62,7 @@ ALL_TOOL_NAMES: set[str] = {outil.name for outil in ALL_TOOLS}
 # C'est le contrat des outils qui modifient quelque chose ou envoient un message
 # (voir `confirmation_gate`), donc le critère se maintient tout seul : un nouvel
 # outil d'action, qui suivra ce contrat, sera exclu d'office. Sert de périmètre
-# au compte de démonstration (`auth_service.connexion_demo`).
+# à la discussion web (canal en lecture seule, voir `routes/chat.py`).
 READONLY_TOOL_NAMES: list[str] = sorted(
     outil.name for outil in ALL_TOOLS if "confirmation" not in outil.args
 )
