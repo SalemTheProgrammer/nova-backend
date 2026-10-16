@@ -68,7 +68,7 @@ _SCHEMA = [
     "CREATE TABLE objectifchaine (IDObjectifChaine INTEGER PRIMARY KEY, Date TEXT, "
     "IDChaineMontage INTEGER, IDPhaseSortie INTEGER, ObjectifSortie INTEGER, "
     "Effectif INTEGER)",
-    "CREATE TABLE employe (IDEmploye INTEGER PRIMARY KEY, Matricule TEXT, Nom TEXT, "
+    "CREATE TABLE employe (IDEmploye INTEGER PRIMARY KEY, Matricule INTEGER, Nom TEXT, "
     "Prenom TEXT, IDChaineMontage INTEGER, IDPosteTravail INTEGER, NumCIN TEXT, "
     "NumCNSS TEXT)",
     "CREATE TABLE presence (IDPresence INTEGER PRIMARY KEY, Date TEXT, IDEmploye INTEGER, "
@@ -217,7 +217,7 @@ def peupler(engine: Engine) -> None:
             {"IDEmploye": 202, "Matricule": "M202", "Nom": "GHARBI", "Prenom": "Leila",
              "IDChaineMontage": ID_LIGNE_CH1_L2, "IDPosteTravail": 2,
              "NumCIN": "00000004", "NumCNSS": "CNSS-4"},
-            {"IDEmploye": 203, "Matricule": "M203", "Nom": "JLASSI", "Prenom": "Karim",
+            {"IDEmploye": 203, "Matricule": 8470, "Nom": "JLASSI", "Prenom": "Karim",
              "IDChaineMontage": ID_LIGNE_CH1_L2, "IDPosteTravail": 3,
              "NumCIN": "00000005", "NumCNSS": "CNSS-5"},
         ])

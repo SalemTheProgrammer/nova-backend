@@ -149,7 +149,7 @@ _COLONNES_EMPLOYE = "IDEmploye, Matricule, Nom, Prenom, IDChaineMontage, IDPoste
 def _operateur(r: dict) -> Operateur:
     return Operateur(
         id=int(r["IDEmploye"]),
-        matricule=r["Matricule"] or "",
+        matricule=str(r["Matricule"]) if r["Matricule"] is not None else "",
         nom=r["Nom"] or "",
         prenom=r["Prenom"] or "",
         ligne_id=int(r["IDChaineMontage"]) if r["IDChaineMontage"] else None,
@@ -169,10 +169,12 @@ def rechercher_operateurs(texte: str, limite: int = 10) -> list[Operateur]:
     texte = (texte or "").strip()
     if not texte:
         return []
+    # DIVA stocke le matricule en entier : lier un entier quand le texte est numérique
+    matricule = int(texte) if texte.isascii() and texte.isdigit() else texte
     exact = requete(
         f"SELECT {_COLONNES_EMPLOYE} FROM employe WHERE Matricule = :m "
         "ORDER BY Nom, Prenom LIMIT :limite",
-        m=texte, limite=limite,
+        m=matricule, limite=limite,
     )
     if exact:
         return [_operateur(r) for r in exact]

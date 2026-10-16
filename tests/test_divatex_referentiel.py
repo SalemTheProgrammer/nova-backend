@@ -87,3 +87,9 @@ def test_employe_sans_donnees_personnelles(divatex, capture_sql):
 def test_rechercher_operateurs_jokers_echappes(divatex):
     assert rechercher_operateurs("%") == []
     assert rechercher_operateurs("_") == []
+
+
+def test_matricule_entier_converti_en_texte_et_recherche_numerique(divatex):
+    trouves = rechercher_operateurs("8470")
+    assert [o.nom for o in trouves] == ["JLASSI"]
+    assert trouves[0].matricule == "8470"

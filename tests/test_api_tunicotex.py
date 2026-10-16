@@ -66,6 +66,12 @@ def test_operateurs_et_fiche(auth_client, divatex):
     assert auth_client.get(f"{B}/operateurs/999999", headers=H).status_code == 404
 
 
+def test_operateurs_matricule_entier_en_texte(auth_client, divatex):
+    r = auth_client.get(f"{B}/operateurs?du=2026-08-28&au=2026-08-28", headers=H)
+    assert r.status_code == 200
+    assert all(isinstance(x["operateur"]["matricule"], str) for x in r.json())
+
+
 def test_operateurs_periode_400(auth_client, divatex):
     r = auth_client.get(f"{B}/operateurs?du=2026-06-01&au=2026-08-28", headers=H)
     assert r.status_code == 400
