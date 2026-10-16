@@ -25,10 +25,11 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app.agent.runner import run_agent_avec_artifacts
+from app.agent.tools import READONLY_TOOL_NAMES
 from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.logging import get_logger
-from app.core.security import require_api_key
+from app.core.security import require_admin, require_api_key
 from app.db.session import session_scope
 from app.models.utilisateur import Utilisateur
 from app.schemas.tunicotex import ParametresRapportSchema
@@ -36,11 +37,18 @@ from app.services import auth_service, chart_image_service, tunicotex_pdf
 from app.services.notify_service import WHATSAPP_MAX_CHARS, normaliser_numero
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"], dependencies=[Depends(require_api_key)])
-public_router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
+# Appairage de la session WhatsApp de Nova (QR, code d'association, reset) :
+# réservé à un administrateur connecté. Quiconque pourrait ré-appairer le numéro
+# recevrait ensuite les codes de connexion et se connecterait comme admin.
+admin_router = APIRouter(
+    prefix="/whatsapp",
+    tags=["whatsapp"],
+    dependencies=[Depends(require_api_key), Depends(require_admin)],
+)
 logger = get_logger(__name__)
 
 
-@public_router.get("/qr", response_class=HTMLResponse)
+@admin_router.get("/qr", response_class=HTMLResponse)
 async def whatsapp_qr_page() -> HTMLResponse:
     """Affiche la page de scan QR code WhatsApp en HD."""
     settings = get_settings()
@@ -56,7 +64,7 @@ async def whatsapp_qr_page() -> HTMLResponse:
         )
 
 
-@public_router.get("/qr.svg")
+@admin_router.get("/qr.svg")
 async def whatsapp_qr_svg_endpoint() -> Response:
     """Retourne le QR code WhatsApp directement au format SVG."""
     settings = get_settings()
@@ -78,7 +86,7 @@ async def whatsapp_qr_svg_endpoint() -> Response:
         )
 
 
-@public_router.get("/status")
+@router.get("/status")
 async def whatsapp_status_endpoint() -> dict:
     """Retourne l'état de connexion de la session WhatsApp."""
     settings = get_settings()
@@ -91,7 +99,7 @@ async def whatsapp_status_endpoint() -> dict:
         return {"connected": False, "error": str(e)}
 
 
-@public_router.get("/qr-raw")
+@admin_router.get("/qr-raw")
 async def whatsapp_qr_raw_endpoint() -> dict:
     """Retourne le QR code brut en direct."""
     settings = get_settings()
@@ -104,8 +112,7 @@ async def whatsapp_qr_raw_endpoint() -> dict:
         return {"qr": "", "connected": False, "error": str(e)}
 
 
-@public_router.get("/reset")
-@public_router.post("/reset")
+@admin_router.post("/reset")
 async def whatsapp_reset_endpoint() -> dict:
     """Réinitialise la session WhatsApp (supprime ./auth) et relance un scan propre."""
     settings = get_settings()
@@ -118,7 +125,7 @@ async def whatsapp_reset_endpoint() -> dict:
         return {"ok": False, "error": str(e)}
 
 
-@public_router.post("/pairing-code")
+@admin_router.post("/pairing-code")
 async def whatsapp_pairing_code_endpoint(payload: dict) -> dict:
     """Demande un code d'association WhatsApp par numéro de téléphone."""
     settings = get_settings()
@@ -213,11 +220,9 @@ def formater_pour_whatsapp(texte: str) -> str:
 
 
 def _numero_autorise(e164: str) -> bool:
-    """Liste blanche `WHATSAPP_ALLOWED_NUMBERS` (CSV). Vide = tout le monde (démo)."""
+    """Liste blanche `WHATSAPP_ALLOWED_NUMBERS` (CSV). Vide = aucun numéro inconnu."""
     settings = get_settings()
-    if not settings.whatsapp_allowed_numbers:
-        return True
-    for num in settings.whatsapp_allowed_numbers:
+    for num in settings.whatsapp_allowed_numbers or []:
         try:
             if normaliser_numero(num) == e164:
                 return True
@@ -232,8 +237,8 @@ def _resoudre_acces(e164: str) -> tuple[bool, list[str] | None]:
     - Numéro enregistré et actif → (True, ses outils). L'admin → (True, None) =
       tous les outils.
     - Numéro enregistré mais désactivé → (False, _).
-    - Numéro inconnu → repli sur la liste blanche `WHATSAPP_ALLOWED_NUMBERS`
-      (tous les outils), pour ne pas casser la démo si la table est vide.
+    - Numéro inconnu → refusé, sauf s'il figure dans `WHATSAPP_ALLOWED_NUMBERS` :
+      il reçoit alors les seuls outils de lecture (jamais tous les outils).
     """
     with session_scope() as db:
         user = db.execute(
@@ -243,7 +248,9 @@ def _resoudre_acces(e164: str) -> tuple[bool, list[str] | None]:
             if not user.actif:
                 return False, None
             return True, auth_service.outils_pour(user)
-    return _numero_autorise(e164), None
+    if _numero_autorise(e164):
+        return True, list(READONLY_TOOL_NAMES)
+    return False, []
 
 
 def _decoder_base64(donnees_b64: str, *, quoi: str) -> bytes:
