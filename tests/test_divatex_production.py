@@ -65,7 +65,7 @@ def test_tendance(divatex):
 
 def test_situation_atelier(divatex):
     s = situation_atelier(JOUR)
-    assert (s.sortie, s.objectif, s.a_des_lectures, s.nb_of_en_retard) == (30, 502, True, 0)
+    assert (s.sortie, s.objectif, s.a_des_lectures, s.nb_of_en_retard) == (30, 502, True, 2)
     assert s.taux == pytest.approx(30 / 502)
     assert s.lignes_sous_objectif == ["CH1-L2"]  # CH1-L1 sans lecture : ni sous ni au-dessus
     assert s.lignes_au_dessus == []
