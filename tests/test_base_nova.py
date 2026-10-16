@@ -22,6 +22,7 @@ def test_url_masquee_sqlite_inchangee():
 
 
 def test_chemin_historique_non_sqlite(monkeypatch):
+    monkeypatch.delenv("CHAT_HISTORY_DB_PATH", raising=False)
     monkeypatch.setenv("DATABASE_URL", "mysql+pymysql://u:p@h/nova")
     get_settings.cache_clear()
     try:
@@ -45,7 +46,10 @@ def test_chemin_historique_explicite(monkeypatch):
 def test_creation_tables_mariadb():  # NOVA_TEST_MARIADB_URL pointe vers une base vide
     from app import models  # noqa: F401
 
-    engine = create_engine(os.environ["NOVA_TEST_MARIADB_URL"])
+    url = os.environ.get("NOVA_TEST_MARIADB_URL")
+    if not url:
+        pytest.skip("NOVA_TEST_MARIADB_URL non défini")
+    engine = create_engine(url)
     Base.metadata.create_all(engine)
     assert {
         "utilisateurs",

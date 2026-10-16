@@ -4,8 +4,9 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
-from contextlib import asynccontextmanager
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import structlog
 from fastapi import FastAPI, Request
@@ -50,8 +51,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     from app.agent.graph import init_graph
     from app.core.paths import chat_history_db_path
-
-    from pathlib import Path
 
     historique = chat_history_db_path()
     Path(historique).parent.mkdir(parents=True, exist_ok=True)
