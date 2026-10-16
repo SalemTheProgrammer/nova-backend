@@ -1,67 +1,78 @@
-# Nova — backend
+# Nova Opsis Tunicotex — backend
 
-FastAPI application. It contains:
-- the MES domain: work orders, FEFO stock, TRS/OEE, downtime, quality, scheduling;
-- the LangGraph agent and its 46 tools;
-- the autonomous supervisor;
-- the **Sparkplug B primary host**, which ingests PLC telemetry over MQTT and
-  sends machine commands.
+Application FastAPI. Elle contient :
 
-See the [root README](../README.md) for the full picture, configuration and API
-reference, and [../simulator/README.md](../simulator/README.md) for the
-simulated plant and the metric contract.
+- l'agent LangGraph et ses outils (catégorie **Atelier Tunicotex**, documents,
+  notifications, planification d'envois, navigation) ;
+- la couche de données DIVA, `app/integrations/divatex/` : le seul endroit qui
+  interroge la base de production, en lecture seule ;
+- les rapports PDF R1 à R5 et les envois planifiés (rapport du matin) ;
+- l'authentification par téléphone (code WhatsApp) et l'administration.
 
-## Run
+Voir le [README racine](../README.md) pour l'ensemble (architecture, écrans, API),
+[../docs/tunicotex/calibration.md](../docs/tunicotex/calibration.md) pour l'état de
+la calibration et [../docs/tunicotex/provision.sql](../docs/tunicotex/provision.sql)
+pour le provisionnement MariaDB.
+
+## Lancer
 
 ```bash
 pip install -r requirements.txt
-cp .env.example .env              # set OPENAI_API_KEY, ADMIN_PHONE, AUTH_SECRET
-python -m app.db.seed             # minimal master data
-python -m scripts.migrate_mqtt    # once, for databases created before the MQTT rework
-uvicorn app.main:app --reload --port 8000
+cp .env.example .env     # OPENAI_API_KEY, ADMIN_PHONE, AUTH_SECRET, DATABASE_URL, DIVATEX_URL
+uvicorn app.main:app --reload --port 8000     # un seul worker
 ```
 
-The backend needs an MQTT broker (`MQTT_HOST`, default `localhost:1883`). It
-starts without one and keeps reconnecting; in the meantime machine commands
-fail with "broker MQTT non connecté".
+La base `nova` est **neuve** : les tables sont créées au démarrage, sans
+migration, et les anciens fichiers SQLite de la version pharmaceutique ne
+doivent pas être réutilisés. Sans `DIVATEX_URL`, le backend démarre mais les
+routes `/tunicotex` répondent 503 « Base DIVA injoignable. ».
 
-## How machine data flows
+## Réglages
 
-```
-PLC / nova-sim ──DBIRTH/DDATA──▶ broker ──▶ SparkplugHost (paho thread)
-                                              │ queue
-                                              ▼
-                                   SparkplugIngestor (1 thread)
-                                   seq/bdSeq tracking, aliases, registry
-                                              │
-                                   mapper: tags → MES events
-                                              │
-                                   event_service → state, TRS log, alerts
-                                              │ after commit
-                                   command ack released + WebSocket broadcast
+Source de vérité : `app/core/config.py`. Modèle : `.env.example`.
 
-Nova tool / supervisor / REST ──▶ machine_command_service ──DCMD──▶ broker ──▶ PLC
-                                   (waits for Command/LastId ack, 5 s timeout)
-```
+| Groupe | Variables |
+|---|---|
+| Application | `APP_NAME`, `ENVIRONMENT`, `LOG_LEVEL`, `API_PREFIX`, `HOST`, `PORT` |
+| Bases | `DATABASE_URL` (MariaDB `nova` en production), `CHAT_HISTORY_DB_PATH` (SQLite) |
+| DIVA | `DIVATEX_URL`, `DIVATEX_STATEMENT_TIMEOUT_S` (15), `DIVATEX_CACHE_TTL_S` (60), `DIVATEX_DATE_REFERENCE` (auto) |
+| Calibration | `DIVATEX_TEMPS_FACTEUR` (1.0), `DIVATEX_APPLIQUER_MAJORATION` (true), `DIVATEX_DUREE_POSTE_MIN` (480), `DIVATEX_PHASE_FINALE` (12), `DIVATEX_CALIBRE` (false) |
+| Sécurité | `CORS_ORIGINS`, `API_KEYS`, `AUTH_SECRET`, `AUTH_TOKEN_TTL_S`, `VERIFICATION_CODE_TTL_S`, `ADMIN_PHONE` |
+| LLM et voix | `OPENAI_API_KEY`, `LLM_MODEL`, `LLM_TEMPERATURE`, `EMBEDDING_MODEL`, `AGENT_RECURSION_LIMIT`, `STT_MODEL`, `TTS_MODEL`, `TTS_VOICE`, `VISION_MODEL` |
+| Documents | `PINECONE_API_KEY`, `PINECONE_INDEX_NAME`, `PINECONE_CLOUD`, `PINECONE_REGION`, `PINECONE_EMBEDDING_DIMENSION`, `DOCUMENTS_PDF_DIR` |
+| Notifications | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `WHATSAPP_SERVICE_URL`, `WHATSAPP_INBOUND_ENABLED`, `WHATSAPP_ALLOWED_NUMBERS` |
+| Rapport du matin | `AUTO_BILAN_ENABLED`, `AUTO_BILAN_CANAL`, `AUTO_BILAN_DESTINATAIRE`, `AUTO_BILAN_HEURES`, `AUTO_BILAN_RAPPORT` (R1 à R4) |
 
-Rules that keep this correct:
+## Règles à respecter
 
-- **Telemetry is the only writer of machine state.** A command never changes
-  state by itself: the machine's confirmed report does.
-- **Never wait on a command inside an open write transaction.** SQLite has a
-  single writer, and ingestion must be able to commit the confirmed state.
-  Multi-step flows (launch with pre-emption, re-route, stop a line) live in
-  `production_control_service` and commit between steps.
-- **Counters are PLC totals.** The MES counts the delta against the last value,
-  which is persisted in `sparkplug_device.last_values`, so production made
-  while the MES was down is still counted.
+- **DIVA est en lecture seule.** Le SQL vers `divatex` n'existe que dans
+  `app/integrations/divatex/` ; les paramètres sont toujours liés (`:nom`) ; chaque
+  connexion exécute `SET SESSION TRANSACTION READ ONLY` et
+  `SET SESSION max_statement_time`. Pas d'outil texte-vers-SQL.
+- Toute requête sur `lectures` filtre d'abord sur un préfixe d'index
+  (`IDChaineMontage, Date`, `IDOFabrication, Date`, `Date` ou `IDEmploye`).
+- Sur `employe`, seules les colonnes `IDEmploye, Matricule, Nom, Prenom,
+  IDChaineMontage, IDPosteTravail` sont lues.
+- « Aujourd'hui » est `date_reference()`, jamais `date.today()`. Toute réponse
+  chiffrée et toute page de PDF affichent « Données au JJ/MM/AAAA ».
+- Le rendement est suivi de « (estimé) » tant que `DIVATEX_CALIBRE=false`.
+- Un seul worker uvicorn : le planificateur d'envois tourne dans le processus.
 
 ## Tests
 
 ```bash
 pip install -e ".[dev]"
-pytest
+python -m pytest -q                 # sans MariaDB, OpenAI ni réseau
+python -m pytest -m divatex -v      # optionnel, contre la vraie base DIVA (DIVATEX_URL)
+python -m pytest -m mariadb         # optionnel, MariaDB vide (NOVA_TEST_MARIADB_URL)
 ```
 
-No broker or OpenAI key is needed. The command-loop tests inject a fake PLC
-that answers DCMDs the way `nova-sim` does.
+## Calibration
+
+```bash
+python -m scripts.calibration_divatex 2026-08-26 2026-08-27 2026-08-28
+```
+
+Affiche, par jour et par ligne, la sortie, l'objectif, l'effectif, les minutes
+produites, la présence et le rendement, à comparer avec la fiche de production
+de Tunicotex (voir `docs/tunicotex/calibration.md`).
