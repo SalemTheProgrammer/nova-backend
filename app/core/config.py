@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     divatex_cache_ttl_s: int = 60
     # "auto" = date de la dernière lecture, "today" = aujourd'hui, ou AAAA-MM-JJ.
     divatex_date_reference: str = "auto"
-    divatex_temps_facteur: float = 1 / 60
+    divatex_temps_facteur: float = 1.0  # provisoire : "Temps" DIVA semble déjà en minutes
     divatex_appliquer_majoration: bool = True
     divatex_duree_poste_min: int = 480
     divatex_phase_finale: int = 12

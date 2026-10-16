@@ -26,8 +26,8 @@ def test_production_ligne_objectif_ancien(divatex):
     assert l.objectif_date == date(2026, 3, 31)
     assert l.taux == pytest.approx(30 / 382)
     assert l.minutes_presence == 3 * 480
-    assert l.minutes_produites == pytest.approx(10.0)
-    assert l.rendement == pytest.approx(10 / 1440)
+    assert l.minutes_produites == pytest.approx(600.0)
+    assert l.rendement == pytest.approx(600 / 1440)
 
 
 def test_ligne_sans_lecture_ce_jour_mais_objectif(divatex):
@@ -69,7 +69,7 @@ def test_situation_atelier(divatex):
     assert s.taux == pytest.approx(30 / 502)
     assert s.lignes_sous_objectif == ["CH1-L2"]  # CH1-L1 sans lecture : ni sous ni au-dessus
     assert s.lignes_au_dessus == []
-    assert s.rendement_moyen == pytest.approx(10 / 1440)
+    assert s.rendement_moyen == pytest.approx(600 / 1440)
 
 
 def test_situation_atelier_sans_lecture(divatex):

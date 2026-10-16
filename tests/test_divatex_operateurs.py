@@ -34,8 +34,8 @@ def test_classement_trie(divatex):
     assert len(r) == 3
     valeurs = [x.rendement for x in r]
     assert valeurs == sorted(valeurs, reverse=True)
-    # 10 scans x 20 min / 60 = 3,33 min produites pour 480 min estimées
-    assert r[0].minutes_produites == pytest.approx(10 * 20 / 60)
+    # 10 scans x 20 min (facteur 1) = 200 min produites pour 480 min estimées
+    assert r[0].minutes_produites == pytest.approx(10 * 20)
     assert r[0].pieces_operations == 10
     assert r[0].ligne == "CH1-L2"
 
@@ -88,7 +88,7 @@ def test_fiche_operateur(divatex):
     f = fiche_operateur(ID_EMPS_CH1_L2[0], REF_DATE, REF_DATE)
     assert f.operations == [("ASSEMBLAGE COL", 10)]
     assert f.total.pieces_operations > 0
-    assert f.par_jour == [(REF_DATE, pytest.approx(10 * 20 / 60 / 480))]
+    assert f.par_jour == [(REF_DATE, pytest.approx(10 * 20 / 480))]
 
 
 def test_fiche_inconnue_ou_sans_scan(divatex):
