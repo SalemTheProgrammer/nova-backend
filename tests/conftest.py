@@ -45,3 +45,6 @@ def auth_client() -> TestClient:
 
     app.dependency_overrides[get_current_user] = _fake_user
     return TestClient(app)
+
+
+from tests.divatex_fixtures import capture_sql, divatex  # noqa: E402,F401
