@@ -15,6 +15,7 @@ from typing import Any
 from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import InterfaceError, OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 
 from app.core.config import get_settings
 from app.core.exceptions import AppError
@@ -50,7 +51,7 @@ def _est_mysql(nom: str) -> bool:
 
 def _est_indisponibilite(exc: Exception) -> bool:
     """Seules les pannes de connectivité / délais sont traduites ; le reste remonte."""
-    if isinstance(exc, (InterfaceError, TimeoutError)):
+    if isinstance(exc, (InterfaceError, TimeoutError, PoolTimeoutError)):
         return True
     if isinstance(exc, OperationalError):
         orig = exc.orig
@@ -109,7 +110,7 @@ def connexion() -> Iterator[Connection]:
     try:
         with get_engine().connect() as conn:
             yield conn
-    except (OperationalError, InterfaceError, TimeoutError) as exc:
+    except (OperationalError, InterfaceError, TimeoutError, PoolTimeoutError) as exc:
         if not _est_indisponibilite(exc):
             raise
         logger.warning("divatex_indisponible", erreur=str(getattr(exc, "orig", exc)))

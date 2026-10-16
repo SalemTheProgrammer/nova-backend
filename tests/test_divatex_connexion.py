@@ -138,3 +138,16 @@ def test_ecriture_refusee_sur_divatex_reel(monkeypatch):
     get_settings.cache_clear()
     with pytest.raises((DBAPIError, DivatexIndisponible)):
         requete("UPDATE alea SET Alea = Alea WHERE IDAlea = -1")
+
+
+def test_delai_pool_traduit_en_indisponibilite():
+    from unittest.mock import MagicMock
+
+    from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+    faux = MagicMock()
+    faux.connect.side_effect = PoolTimeoutError("QueuePool limit reached")
+    set_engine(faux)
+    with pytest.raises(DivatexIndisponible) as exc:
+        requete("SELECT 1")
+    assert exc.value.message == "Base DIVA injoignable."
