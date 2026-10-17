@@ -155,3 +155,71 @@ def test_pages_et_carte_outils():
                           "rapports", "documents"}
     assert {t.name for t in TUNICOTEX_TOOLS} == set(TOOL_PAGE_MAP)
     assert set(TOOL_PAGE_MAP.values()) <= set(PAGES)
+
+
+def _ajouter_of_10():
+    """Ajoute « …_LCS4G-10 », que la recherche par préfixe de « …_LCS4G-1 » trouve aussi."""
+    from sqlalchemy import text
+
+    from app.integrations.divatex import connexion
+    from tests.divatex_fixtures import NOM_OF_91294_1
+
+    with connexion.get_engine().begin() as conn:
+        conn.execute(
+            text(
+                "INSERT INTO ofabrication (IDOFabrication, OFAbrication, IDArticle, IDClient, "
+                "IDCommande, Quantite, Etat, DateExportPrevue, DtDebut, NumCmdClient, PO) "
+                "VALUES (99, :nom, 1, 1, 1, 10, 1, '2026-08-26', '2026-08-10', 'NC', 'PO')"
+            ),
+            {"nom": NOM_OF_91294_1 + "0"},
+        )
+    connexion.vider_caches()
+    return NOM_OF_91294_1
+
+
+def test_avancement_of_numero_exact_non_ambigu(divatex):
+    nom = _ajouter_of_10()
+    _, art = appeler(rechercher_of, {"texte": nom})
+    assert len(art["lignes"]) == 2  # la recherche reste par préfixe
+    _, art = appeler(avancement_of, {"of": nom})
+    assert art["kind"] == "phase_pipeline" and art["of"]["numero"] == nom
+
+
+def test_parametres_rapport_numero_exact_non_ambigu(divatex):
+    from app.agent.tools.tunicotex import resoudre_parametres_rapport
+    from tests.divatex_fixtures import ID_OF_91294_1
+
+    nom = _ajouter_of_10()
+    params = resoudre_parametres_rapport("R5", of=f"  {nom.lower()} ")
+    assert params.of_id == ID_OF_91294_1
+
+
+def test_commandes_a_risque_texte_borne(divatex, monkeypatch):
+    """Des centaines d'OF à risque : totaux, répartition client, 15 OF puis renvoi à l'écran."""
+    from datetime import date as d
+
+    from app.agent.tools import tunicotex as outils
+    from app.integrations.divatex.commandes import OFRisque
+    from app.integrations.divatex.of import OFResume
+
+    def risque(i, statut):
+        of = OFResume(i, f"OF-{i:03d}", "ACME" if i % 2 else "BETA", None, 10,
+                      d(2026, 8, 27), True, 0.5)
+        return OFRisque(of, statut, 1)
+
+    risques = [risque(i, "en_retard") for i in range(20)] + [
+        risque(i, "a_risque") for i in range(20, 100)
+    ]
+    monkeypatch.setattr(outils.cmd, "of_a_risque", lambda jour, horizon: risques)
+    txt, art = appeler(commandes_a_risque, {})
+    assert txt.startswith("100 OF à risque : 20 en retard (7 derniers jours), 80 à exporter")
+    assert "Par client : BETA 50, ACME 50." in txt
+    assert "OF-014" in txt and "OF-015" not in txt
+    assert "… et 85 autres (voir l'écran Commandes)." in txt
+    assert len(art["lignes"]) == 50
+
+
+def test_situation_atelier_retard_libelle(divatex):
+    txt, art = appeler(situation_atelier, {})
+    assert "OF en retard (7 derniers jours) : 2" in txt
+    assert any(t["libelle"] == "OF en retard (7 derniers jours)" for t in art["tuiles"])

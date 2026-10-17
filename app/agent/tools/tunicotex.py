@@ -6,6 +6,7 @@ fonction du dépôt (`situation_atelier`, `rechercher_of`, …).
 from __future__ import annotations
 
 import functools
+from collections import Counter
 from datetime import date as Date
 
 from langchain_core.tools import tool
@@ -137,7 +138,7 @@ def situation_atelier(date: str | None = None) -> tuple[str, dict | None]:
         f"Sortie confection totale : {s.sortie}. Rendement moyen : {_rendement(s.rendement_moyen)}. "
         f"Chaînes sous objectif : {', '.join(s.lignes_sous_objectif) or 'aucune'}. "
         f"Chaînes au-dessus : {', '.join(s.lignes_au_dessus) or 'aucune'}. "
-        f"OF en retard : {s.nb_of_en_retard}."
+        f"OF en retard (7 derniers jours) : {s.nb_of_en_retard}."
     )
     etat_taux = "neutre" if s.taux is None else ("ok" if s.taux >= 1 else "alerte")
     artifact = {
@@ -149,7 +150,7 @@ def situation_atelier(date: str | None = None) -> tuple[str, dict | None]:
             _tuile("Atteinte", _pct(s.taux), etat=etat_taux),
             _tuile("Sortie confection totale", s.sortie, "pièces"),
             _tuile("Rendement", _rendement(s.rendement_moyen)),
-            _tuile("OF en retard", s.nb_of_en_retard,
+            _tuile("OF en retard (7 derniers jours)", s.nb_of_en_retard,
                    etat="alerte" if s.nb_of_en_retard else "ok"),
         ],
     }
@@ -236,6 +237,15 @@ def _statut_of(of: ofs.OFResume) -> str:
     return "Terminé" if of.avancement_final >= 1 else "Ouvert"
 
 
+def _rechercher_of_exact(texte: str) -> list[ofs.OFResume]:
+    """`rechercher_of`, mais un numéro saisi en entier désigne son seul OF :
+    « …_LCS4G-1 » ne doit pas rester ambigu avec « …_LCS4G-10 »."""
+    resultats = ofs.rechercher_of(texte)
+    cible = texte.strip().casefold()
+    exacts = [o for o in resultats if (o.numero or "").strip().casefold() == cible]
+    return exacts if len(exacts) == 1 else resultats
+
+
 def _table_ofs(titre: str, jour: Date, resultats: list[ofs.OFResume]) -> dict:
     return _table(
         titre, jour,
@@ -269,7 +279,7 @@ def avancement_of(of: str) -> tuple[str, dict | None]:
     """Avancement d'un ordre de fabrication par phase et par taille. Si plusieurs OF
     correspondent au texte, renvoie la liste pour que l'opérateur précise."""
     jour = connexion.date_reference()
-    resultats = ofs.rechercher_of(of)
+    resultats = _rechercher_of_exact(of)
     if not resultats:
         return _fin(f"Aucun OF trouvé pour « {of} ».", jour), None
     if len(resultats) > 1:
@@ -416,6 +426,10 @@ def fiche_operateur(operateur: str, periode_jours: int | None = 7) -> tuple[str,
 # --- commandes ---------------------------------------------------------------
 
 
+_MAX_OF_TEXTE = 15
+_MAX_OF_TABLEAU = 50
+
+
 @tool(response_format="content_and_artifact")
 @_hors_service
 def commandes_a_risque(horizon_jours: int | None = 7) -> tuple[str, dict | None]:
@@ -427,14 +441,23 @@ def commandes_a_risque(horizon_jours: int | None = 7) -> tuple[str, dict | None]
     if not risques:
         return _fin(f"Aucun OF à risque dans les {horizon} prochains jours.", jour), None
     retards = [r for r in risques if r.statut == "en_retard"]
+    par_client = Counter(r.of.client or "—" for r in risques)
+    # Sur données réelles, des centaines d'OF peuvent être à risque : le texte
+    # donne les totaux, la répartition par client et les premiers OF (retards
+    # d'abord, `of_a_risque` les trie ainsi) ; le reste est sur l'écran Commandes.
+    details = "; ".join(
+        f"{r.of.numero} ({r.of.client or '—'}) "
+        + (f"en retard de {r.jours} j" if r.statut == "en_retard"
+           else f"export dans {r.jours} j")
+        for r in risques[:_MAX_OF_TEXTE]
+    )
+    reste = len(risques) - _MAX_OF_TEXTE
     texte = (
-        f"{len(risques)} OF à risque dont {len(retards)} en retard : "
-        + "; ".join(
-            f"{r.of.numero} ({r.of.client or '—'}) "
-            + (f"en retard de {r.jours} j" if r.statut == "en_retard"
-               else f"export dans {r.jours} j")
-            for r in risques
-        ) + "."
+        f"{len(risques)} OF à risque : {len(retards)} en retard (7 derniers jours), "
+        f"{len(risques) - len(retards)} à exporter dans les {horizon} prochains jours. "
+        f"Par client : {', '.join(f'{c} {n}' for c, n in par_client.most_common())}. "
+        f"{details}"
+        + (f" … et {reste} autres (voir l'écran Commandes)." if reste > 0 else ".")
     )
     table = _table(
         "Commandes à risque", jour,
@@ -442,7 +465,7 @@ def commandes_a_risque(horizon_jours: int | None = 7) -> tuple[str, dict | None]
         [[r.of.numero, r.of.client or "—", _jjmmaaaa(r.of.date_export_prevue),
           _pct(r.of.avancement_final),
           f"En retard de {r.jours} j" if r.statut == "en_retard"
-          else f"Dans {r.jours} j"] for r in risques],
+          else f"Dans {r.jours} j"] for r in risques[:_MAX_OF_TABLEAU]],
     )
     return _fin(texte, jour), table
 
@@ -509,7 +532,7 @@ def resoudre_parametres_rapport(
             raise _ErreurSaisie(_groupe_inconnu(groupe, jour_ref))
         groupe_id = g.id
     if of:
-        resultats = ofs.rechercher_of(of)
+        resultats = _rechercher_of_exact(of)
         if not resultats:
             raise _ErreurSaisie(_fin(f"Aucun OF trouvé pour « {of} ».", jour_ref))
         if len(resultats) > 1:

@@ -16,7 +16,7 @@ from app.agent.runner import (
     run_agent,
     stream_agent,
 )
-from app.agent.tools import READONLY_TOOL_NAMES
+from app.agent.tools import READONLY_TOOL_NAMES, TOOL_CATALOG
 from app.core.security import get_current_user
 from app.db.session import session_scope
 from app.models.utilisateur import Utilisateur
@@ -32,6 +32,10 @@ from app.services import ai_agent_service, auth_service
 router = APIRouter(tags=["agent"])
 
 _READONLY = frozenset(READONLY_TOOL_NAMES)
+_OUTILS_ATELIER = frozenset(
+    o["name"] for o in TOOL_CATALOG if o["categorie"] == "Atelier Tunicotex"
+)
+ACCUEIL_NEUTRE = ["Bonjour, je suis Nova.", "Comment puis-je vous aider ?"]
 
 
 def _outils_web(user: Utilisateur) -> list[str]:
@@ -75,6 +79,12 @@ async def chat_clear(thread_id: str, user: Utilisateur = Depends(get_current_use
     await delete_thread(thread_id)
 
 
+def _voit_l_atelier(user: Utilisateur) -> bool:
+    """Les chiffres d'atelier de l'accueil sont réservés à l'admin et aux comptes
+    ayant au moins un outil « Atelier Tunicotex »."""
+    return user.is_admin or bool(_OUTILS_ATELIER & set(user.outils_autorises or []))
+
+
 def _accueil_depuis_atelier() -> list[str]:
     with session_scope() as db:
         return ai_agent_service.generer_accueil(db)
@@ -88,7 +98,10 @@ async def chat_accueil(
     atelier, décisions en attente). Enregistré comme premier message du thread :
     l'agent sait ce qu'il a dit si l'opérateur y répond."""
     thread_id = payload.thread_id or str(uuid.uuid4())
-    messages = await asyncio.to_thread(_accueil_depuis_atelier)
+    if _voit_l_atelier(user):
+        messages = await asyncio.to_thread(_accueil_depuis_atelier)
+    else:
+        messages = list(ACCUEIL_NEUTRE)
     await enregistrer_accueil(thread_id, messages)
     return ChatAccueilResponse(thread_id=thread_id, messages=messages)
 

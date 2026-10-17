@@ -39,6 +39,8 @@ def generer_accueil(db: Session | None) -> list[str]:
         seule = classees[0]
         messages.append(f"Chaîne {seule.ligne.code} : {_pct(seule.taux)} de l'objectif.")
     messages.append(
-        f"{retards} OF en retard de livraison." if retards else "Aucun OF en retard de livraison."
+        f"{retards} OF en retard de livraison (7 derniers jours)."
+        if retards
+        else "Aucun OF en retard de livraison (7 derniers jours)."
     )
     return messages

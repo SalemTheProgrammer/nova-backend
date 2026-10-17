@@ -36,7 +36,7 @@ def test_accueil(divatex):
     msgs = generer_accueil(None)
     assert 2 <= len(msgs) <= 3
     assert "28/08/2026" in msgs[0] and "Données au" in msgs[0]
-    assert any("retard" in m for m in msgs)
+    assert any("en retard de livraison (7 derniers jours)" in m for m in msgs)
 
 
 def test_accueil_divatex_down():
