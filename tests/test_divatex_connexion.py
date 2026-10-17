@@ -5,7 +5,7 @@ import os
 from datetime import date
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import get_settings
@@ -31,10 +31,13 @@ def engine_fixture():
         connect_args={"check_same_thread": False},
     )
     with engine.begin() as conn:
-        conn.execute(text("CREATE TABLE lectures (IDLectures INTEGER PRIMARY KEY, Date TEXT)"))
+        conn.execute(text(
+            "CREATE TABLE lectures (IDLectures INTEGER PRIMARY KEY, Date TEXT, "
+            "IdPhase INTEGER, Quantite INTEGER)"
+        ))
         conn.execute(
-            text("INSERT INTO lectures (IDLectures, Date) VALUES (1, '2026-08-27'), "
-                 "(2, '2026-08-28'), (3, '2026-08-28')")
+            text("INSERT INTO lectures (IDLectures, Date, IdPhase, Quantite) VALUES "
+                 "(1, '2026-08-27', 5, 1), (2, '2026-08-28', 5, 1), (3, '2026-08-28', 0, 1)")
         )
     set_engine(engine)
     yield engine
@@ -54,6 +57,35 @@ def _reglages(monkeypatch):
 
 
 def test_date_reference_auto(engine_fixture):
+    assert date_reference() == date(2026, 8, 28)
+
+
+def test_date_reference_auto_ids_non_chronologiques_et_jour_partiel(engine_fixture):
+    """Ré-import DIVA : la ligne d'IDLectures max est ancienne, et le dernier jour
+    (dimanche partiel) n'a aucune sortie confection → dernier jour AVEC sortie."""
+    with engine_fixture.begin() as conn:
+        conn.execute(text(
+            "INSERT INTO lectures (IDLectures, Date, IdPhase, Quantite) VALUES "
+            "(10, '2026-08-29', 5, 4), (11, '2026-08-30', 0, 7), (12, '2026-08-30', 1, 3), "
+            "(999, '2026-08-20', 5, 1)"
+        ))
+    vider_caches()
+    capture_sql: list[str] = []
+    event.listen(
+        engine_fixture, "before_cursor_execute",
+        lambda _c, _cu, sql, *_: capture_sql.append(sql),
+    )
+    assert date_reference() == date(2026, 8, 29)
+    assert len(capture_sql) == 2
+    assert all("IDLectures" not in sql for sql in capture_sql)
+    assert date_reference() == date(2026, 8, 29)
+    assert len(capture_sql) == 2  # en cache
+
+
+def test_date_reference_auto_sans_sortie_repli_max_date(engine_fixture):
+    with engine_fixture.begin() as conn:
+        conn.execute(text("UPDATE lectures SET IdPhase = 0"))
+    vider_caches()
     assert date_reference() == date(2026, 8, 28)
 
 

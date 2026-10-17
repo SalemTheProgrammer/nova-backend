@@ -8,7 +8,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 from functools import wraps
 from typing import Any
 
@@ -25,6 +25,8 @@ logger = get_logger(__name__)
 
 _MESSAGE_INDISPONIBLE = "Base DIVA injoignable."
 _TTL_DATE_REFERENCE_S = 600.0
+_JOURS_RECHERCHE_REFERENCE = 14
+_PHASE_SORTIE_CONFECTION = 5
 
 _engine: Engine | None = None
 _verrou = threading.Lock()
@@ -153,18 +155,33 @@ def vider_caches() -> None:
         vider()
 
 
-@cache(ttl_s=_TTL_DATE_REFERENCE_S)
-def _derniere_date_lecture() -> date:
-    lignes = requete(
-        "SELECT Date AS d FROM lectures "
-        "WHERE IDLectures = (SELECT MAX(IDLectures) FROM lectures)"
-    )
-    if not lignes or lignes[0]["d"] is None:
-        raise DivatexIndisponible("Aucune lecture dans la base DIVA.")
-    valeur = lignes[0]["d"]
+def _en_date(valeur: Any) -> date:
     if isinstance(valeur, str):
         return date.fromisoformat(valeur[:10])
     return valeur.date() if hasattr(valeur, "date") else valeur
+
+
+@cache(ttl_s=_TTL_DATE_REFERENCE_S)
+def _derniere_date_lecture() -> date:
+    """Dernier jour avec une sortie confection (phase 5) sur les 14 derniers jours.
+
+    Les IDLectures ne sont pas chronologiques (un import peut les renuméroter) et
+    le dernier jour peut être partiel, sans aucune sortie (dimanche, import en
+    cours de journée) : on part de MAX(Date) (lu sur l'index Date) et on recule
+    jusqu'au jour le plus récent ayant une sortie. Repli : MAX(Date).
+    """
+    lignes = requete("SELECT MAX(Date) AS d FROM lectures")
+    if not lignes or lignes[0]["d"] is None:
+        raise DivatexIndisponible("Aucune lecture dans la base DIVA.")
+    fin = _en_date(lignes[0]["d"])
+    debut = fin - timedelta(days=_JOURS_RECHERCHE_REFERENCE - 1)
+    sorties = requete(
+        "SELECT Date AS d, SUM(CASE WHEN IdPhase = :phase THEN Quantite ELSE 0 END) AS s "
+        "FROM lectures WHERE Date BETWEEN :debut AND :fin GROUP BY Date",
+        phase=_PHASE_SORTIE_CONFECTION, debut=debut.isoformat(), fin=fin.isoformat(),
+    )
+    jours = [_en_date(r["d"]) for r in sorties if r["d"] is not None and (r["s"] or 0) > 0]
+    return max(jours, default=fin)
 
 
 def date_reference() -> date:
