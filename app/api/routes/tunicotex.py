@@ -13,6 +13,7 @@ from app.core.config import get_settings
 from app.core.security import require_api_key
 from app.integrations.divatex import commandes, connexion, of, operateurs, production
 from app.integrations.divatex import referentiel as ref
+from app.models.utilisateur import Utilisateur
 from app.schemas.tunicotex import (
     AtelierSchema,
     AvancementOFSchema,
@@ -182,7 +183,11 @@ def rapport_pdf(
 
 
 @router.post("/rapports/{type_}/envoyer", response_model=EnvoiRapportReponse)
-def envoyer_rapport(type_: str, corps: EnvoiRapportRequete) -> EnvoiRapportReponse:
+def envoyer_rapport(
+    type_: str,
+    corps: EnvoiRapportRequete,
+    user: Utilisateur = Depends(require_category("Notifications")),
+) -> EnvoiRapportReponse:
     type_ = _type_rapport(type_)
 
     try:
@@ -214,5 +219,6 @@ def envoyer_rapport(type_: str, corps: EnvoiRapportRequete) -> EnvoiRapportRepon
         },
         source="web",
         thread_id=None,
+        identite=user.telephone,
     )
     return EnvoiRapportReponse(ok=True, message=f"Rapport envoyé à {corps.destinataire}.")

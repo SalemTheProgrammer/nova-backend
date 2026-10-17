@@ -116,6 +116,33 @@ def test_envoyer_audite(auth_client, divatex, monkeypatch):
     assert envois[0][1]["document"][1][:4] == b"%PDF"
     assert len(audits) == 1 and audits[0]["action"] == "envoyer_rapport_web"
     assert audits[0]["source"] == "web" and audits[0]["thread_id"] is None
+    assert audits[0]["identite"] == "+21600000000"
+
+
+def test_envoyer_exige_notifications(divatex, monkeypatch):
+    """Un compte « Atelier Tunicotex » sans outil « Notifications » ne peut pas envoyer."""
+    from fastapi.testclient import TestClient
+
+    from app.core.security import get_current_user
+    from app.main import create_app
+    from app.models.utilisateur import Utilisateur
+
+    app = create_app()
+    app.dependency_overrides[get_current_user] = lambda: Utilisateur(
+        id=3, telephone="+21600000003", nom_complet="Chef atelier", is_admin=False,
+        actif=True, outils_autorises=["situation_atelier"],
+    )
+    envois = []
+    monkeypatch.setattr(
+        notify_service, "envoyer_whatsapp", lambda *a, **k: envois.append(a) or "ok"
+    )
+    client = TestClient(app)
+    assert client.get(f"{B}/atelier", headers=H).status_code == 200
+    r = client.post(
+        f"{B}/rapports/R1/envoyer", headers=H,
+        json={"canal": "whatsapp", "destinataire": "+21612345678", "parametres": {}},
+    )
+    assert r.status_code == 403 and envois == []
 
 
 def test_envoyer_email(auth_client, divatex, monkeypatch):
