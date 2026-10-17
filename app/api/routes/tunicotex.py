@@ -141,8 +141,12 @@ def fiche_operateur(operateur_id: int, du: date | None = None, au: date | None =
 
 
 @router.get("/commandes", response_model=list[OFRisqueSchema])
-def of_a_risque(horizon: int = Query(7, ge=1, le=365), client: int | None = None):
-    return commandes.of_a_risque(connexion.date_reference(), horizon, client)
+def of_a_risque(
+    horizon: int = Query(7, ge=1, le=365),
+    client: int | None = None,
+    jour: date | None = Query(None, alias="date"),
+):
+    return commandes.of_a_risque(_jour(jour), horizon, client)
 
 
 @router.get("/commandes/recherche", response_model=list[CommandeDetailSchema])

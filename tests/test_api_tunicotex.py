@@ -199,3 +199,11 @@ def test_envoyer_parametres_mal_formes_400(auth_client, divatex, monkeypatch, pa
         json={"canal": "whatsapp", "destinataire": "+21612345678", "parametres": parametres},
     )
     assert r.status_code == 400 and envois == []
+
+
+def test_commandes_a_une_date(auth_client, divatex):
+    """Le tableau de bord liste les retards du jour choisi, pas du jour de référence."""
+    ref = auth_client.get(f"{B}/commandes", headers=H).json()
+    assert sum(r["statut"] == "en_retard" for r in ref) == 2
+    avant = auth_client.get(f"{B}/commandes?date=2026-08-20", headers=H).json()
+    assert not any(r["statut"] == "en_retard" for r in avant)
