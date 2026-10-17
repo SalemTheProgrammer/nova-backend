@@ -7,7 +7,12 @@ from datetime import date, datetime
 
 from app.integrations.divatex import kpi
 from app.integrations.divatex.connexion import requete
-from app.integrations.divatex.referentiel import Operateur, lister_lignes, operateur
+from app.integrations.divatex.referentiel import (
+    Operateur,
+    lister_lignes,
+    operateur,
+    operateurs_par_ids,
+)
 
 _PERIODE_MAX_JOURS = 31
 
@@ -149,8 +154,9 @@ def classement_operateurs(
         par_employe[int(r["IDEmploye"])].append(r)
     presences = _presences(du, au)
     resultat = []
+    fiches = operateurs_par_ids(list(par_employe))
     for emp_id, lignes_emp in par_employe.items():
-        op = operateur(emp_id)
+        op = fiches.get(emp_id)
         if op is None:
             continue
         total, _ = _synthese(op, lignes_emp, presences, codes, natures)

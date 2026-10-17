@@ -141,3 +141,30 @@ def test_pieces_par_phase_of_et_client(divatex):
 def test_pieces_par_phase_periode_limitee(divatex):
     with pytest.raises(ValueError, match="31 jours"):
         pieces_par_phase(date(2026, 7, 1), date(2026, 8, 28))
+
+
+def test_objectif_sans_date_ignore(divatex, monkeypatch):
+    """Un objectif à date nulle (date zéro MariaDB, rendue None par pymysql) est ignoré."""
+    from sqlalchemy import text
+
+    from app.integrations.divatex import connexion, production
+
+    with connexion.get_engine().begin() as conn:
+        conn.execute(text(
+            "INSERT INTO objectifchaine (IDObjectifChaine, Date, IDChaineMontage, "
+            "IDPhaseSortie, ObjectifSortie, Effectif) VALUES (99, '0000-00-00', 10, 5, 999, 1)"
+        ))
+    connexion.vider_caches()
+    origine = production.requete
+
+    def requete_mariadb(sql, **params):
+        lignes = origine(sql, **params)
+        for r in lignes:
+            if r.get("Date") == "0000-00-00":
+                r["Date"] = None
+        return lignes
+
+    monkeypatch.setattr(production, "requete", requete_mariadb)
+    points = tendance(JOUR, jours=3)
+    assert points[-1].objectif == 382
+    assert _ligne("CH1-L2").objectif == 382

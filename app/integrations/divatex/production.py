@@ -62,6 +62,8 @@ def _en_date(valeur) -> date | None:
     if valeur is None:
         return None
     if isinstance(valeur, str):
+        if valeur.startswith("0000"):  # date nulle MariaDB (pymysql la rend en None)
+            return None
         return date.fromisoformat(valeur[:10])
     if isinstance(valeur, datetime):
         return valeur.date()
@@ -87,6 +89,8 @@ def _objectifs(jour: date) -> dict[int, tuple[date, int, int | None]]:
     )
     courant: dict[int, tuple[date, int, int | None]] = {}
     for r in lignes:
+        if _en_date(r["Date"]) is None:  # objectif sans date : inexploitable
+            continue
         phase = int(r["IDPhaseSortie"]) if r["IDPhaseSortie"] else _PHASE_CONFECTION
         obj = int(r["ObjectifSortie"]) if r["ObjectifSortie"] is not None else None
         courant[int(r["IDChaineMontage"])] = (_en_date(r["Date"]), phase, obj)
@@ -213,6 +217,8 @@ def tendance(au: date, jours: int = 7, groupe_id: int | None = None) -> list[Poi
         "WHERE Date <= :au ORDER BY Date, IDObjectifChaine",
         au=au.isoformat(),
     ):
+        if _en_date(r["Date"]) is None:  # objectif sans date : inexploitable
+            continue
         phase = int(r["IDPhaseSortie"]) if r["IDPhaseSortie"] else _PHASE_CONFECTION
         obj = int(r["ObjectifSortie"]) if r["ObjectifSortie"] is not None else None
         historique[int(r["IDChaineMontage"])].append((_en_date(r["Date"]), phase, obj))

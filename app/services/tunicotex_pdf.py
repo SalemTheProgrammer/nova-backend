@@ -175,9 +175,15 @@ def _r1(p: ParametresRapport) -> tuple[str, bytes]:
             sum(l.minutes_produites for l in confection),
             sum(l.minutes_presence for l in confection),
         )
+        # Le taux ne porte que sur les chaînes avec objectif ; la sortie, l'effectif
+        # et le rendement de toute la confection ont leur propre ligne.
         rangees.append([
-            "<b>Total confection</b>", f"<b>{_nombre(objectif)}</b>", f"<b>{_nombre(sortie)}</b>",
-            f"<b>{_pct(taux_total)}</b>",
+            "<b>Total (chaînes avec objectif)</b>", f"<b>{_nombre(objectif)}</b>",
+            f"<b>{_nombre(sortie)}</b>", f"<b>{_pct(taux_total)}</b>", "", "",
+        ])
+        rangees.append([
+            "<b>Sortie confection totale</b>", "",
+            f"<b>{_nombre(sum(l.sortie for l in confection))}</b>", "",
             f"<b>{sum(l.effectif for l in confection)}</b>",
             f"<b>{_rendement(total_rendement)}</b>",
         ])

@@ -169,15 +169,16 @@ def rechercher_operateurs(texte: str, limite: int = 10) -> list[Operateur]:
     texte = (texte or "").strip()
     if not texte:
         return []
-    # DIVA stocke le matricule en entier : lier un entier quand le texte est numérique
-    matricule = int(texte) if texte.isascii() and texte.isdigit() and len(texte) <= 10 else texte
-    exact = requete(
-        f"SELECT {_COLONNES_EMPLOYE} FROM employe WHERE Matricule = :m "
-        "ORDER BY Nom, Prenom LIMIT :limite",
-        m=matricule, limite=limite,
-    )
-    if exact:
-        return [_operateur(r) for r in exact]
+    # DIVA stocke le matricule en entier : la recherche exacte ne se fait que sur
+    # un texte numérique (MariaDB convertirait « Ben » en 0 et le comparerait).
+    if texte.isascii() and texte.isdigit() and len(texte) <= 10:
+        exact = requete(
+            f"SELECT {_COLONNES_EMPLOYE} FROM employe WHERE Matricule = :m "
+            "ORDER BY Nom, Prenom LIMIT :limite",
+            m=int(texte), limite=limite,
+        )
+        if exact:
+            return [_operateur(r) for r in exact]
     mots = texte.split()
     params: dict = {"limite": limite}
     conditions = []
@@ -199,3 +200,23 @@ def operateur(operateur_id: int) -> Operateur | None:
         f"SELECT {_COLONNES_EMPLOYE} FROM employe WHERE IDEmploye = :i", i=operateur_id
     )
     return _operateur(lignes[0]) if lignes else None
+
+
+_TAILLE_LOT_IDS = 100
+
+
+def operateurs_par_ids(ids: list[int]) -> dict[int, Operateur]:
+    """Opérateurs par id, en lots d'au plus 100 ids liés (une requête par lot)."""
+    uniques = sorted({int(i) for i in ids})
+    resultat: dict[int, Operateur] = {}
+    for debut in range(0, len(uniques), _TAILLE_LOT_IDS):
+        lot = uniques[debut : debut + _TAILLE_LOT_IDS]
+        params = {f"i{k}": v for k, v in enumerate(lot)}
+        marqueurs = ", ".join(f":i{k}" for k in range(len(lot)))
+        for r in requete(
+            f"SELECT {_COLONNES_EMPLOYE} FROM employe WHERE IDEmploye IN ({marqueurs})",
+            **params,
+        ):
+            op = _operateur(r)
+            resultat[op.id] = op
+    return resultat

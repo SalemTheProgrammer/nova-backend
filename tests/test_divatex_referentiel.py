@@ -64,7 +64,6 @@ def test_rechercher_operateurs_homonymes(divatex):
 
 
 def test_rechercher_operateur_par_matricule_et_nom_complet(divatex):
-    assert [o.id for o in rechercher_operateurs("M101")] == [ID_EMP_BEN_SALAH_AHMED]
     assert [o.id for o in rechercher_operateurs("ahmed ben salah")] == [ID_EMP_BEN_SALAH_AHMED]
     assert rechercher_operateurs("") == []
     assert len(rechercher_operateurs("ben", limite=1)) == 1
@@ -93,3 +92,25 @@ def test_matricule_entier_converti_en_texte_et_recherche_numerique(divatex):
     trouves = rechercher_operateurs("8470")
     assert [o.nom for o in trouves] == ["JLASSI"]
     assert trouves[0].matricule == "8470"
+
+
+def test_matricule_exact_seulement_si_numerique(divatex, capture_sql):
+    """Matricule INT dans DIVA : « Ben » ne doit jamais être comparé au matricule
+    (MariaDB le convertirait en 0)."""
+    rechercher_operateurs("Ben")
+    assert not any("Matricule =" in sql for sql in capture_sql)
+    capture_sql.clear()
+    rechercher_operateurs("8470")
+    assert any("Matricule =" in sql for sql in capture_sql)
+
+
+def test_operateurs_par_ids_par_lots(divatex, capture_sql):
+    from app.integrations.divatex.referentiel import operateurs_par_ids
+
+    ids = [ID_EMP_BEN_SALAH_AHMED, *range(1000, 1250)]
+    trouves = operateurs_par_ids(ids)
+    assert set(trouves) == {ID_EMP_BEN_SALAH_AHMED}
+    assert trouves[ID_EMP_BEN_SALAH_AHMED].nom_complet == "Ahmed BEN SALAH"
+    assert len(capture_sql) == 3  # 251 ids → 3 lots de 100 au plus
+    assert not any(c in sql for sql in capture_sql for c in ("NumCIN", "NumCNSS", "*"))
+    assert operateurs_par_ids([]) == {}

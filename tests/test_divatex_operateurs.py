@@ -176,3 +176,10 @@ def test_fiche_tricotage_seul(divatex):
     assert f.par_jour == [(REF_DATE, None)]
     assert f.total.rendement is None and f.total.minutes_produites == 0
     assert f.total.pieces_operations == 4
+
+
+def test_classement_requetes_employe_bornees(divatex, capture_sql):
+    """Les fiches employé sont chargées en lot, pas une requête par opérateur."""
+    classement_operateurs(REF_DATE, REF_DATE)
+    requetes_employe = [sql for sql in capture_sql if "FROM employe" in sql]
+    assert len(requetes_employe) == 1

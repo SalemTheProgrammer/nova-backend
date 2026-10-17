@@ -85,7 +85,25 @@ def test_r2_periode_limitee(divatex):
 
 def test_r1_contient_lignes_et_total(divatex):
     texte = texte_pdf(generer_rapport("R1", ParametresRapport())[1])
-    assert "CH1-L2" in texte and "Total" in texte
+    assert "CH1-L2" in texte
+    plat = " ".join(texte.split())
+    assert "Total confection" not in plat
+    assert "Total (chaînes avec objectif) 382 30 8 %" in plat
+    assert "Sortie confection totale 30 3 42 % (estimé)" in plat
+
+
+def test_r1_sortie_totale_hors_objectif(divatex):
+    """Sans objectif, le total « avec objectif » est vide mais la sortie totale reste."""
+    from sqlalchemy import text
+
+    from app.integrations.divatex import connexion
+
+    with connexion.get_engine().begin() as conn:
+        conn.execute(text("DELETE FROM objectifchaine"))
+    connexion.vider_caches()
+    plat = " ".join(texte_pdf(generer_rapport("R1", ParametresRapport())[1]).split())
+    assert "Total (chaînes avec objectif) 0 0" in plat
+    assert "Sortie confection totale 30" in plat
 
 
 def test_r4_groupe_par_client(divatex):
