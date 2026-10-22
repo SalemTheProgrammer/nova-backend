@@ -33,14 +33,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.services.auth_service import seed_admin
 
     seed_admin()
-    # Best-effort: ensure the Pinecone index exists. Non-fatal if it cannot run
-    # (e.g. missing credentials in local dev) so the app can still boot.
+    # Best-effort: ensure the pgvector table exists. Non-fatal if it cannot run
+    # (e.g. no Postgres in local dev) so the app can still boot.
     try:
         from app.services.vector_store import ensure_index_exists
 
         ensure_index_exists()
     except Exception as exc:  # noqa: BLE001
-        logger.warning("pinecone_index_check_skipped", error=str(exc))
+        logger.warning("vector_index_check_skipped", error=str(exc))
 
     # Checkpointer SQLite persistant : l'historique de conversation (par
     # thread_id) survit au refresh de la page ET aux redémarrages du backend

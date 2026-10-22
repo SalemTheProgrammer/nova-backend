@@ -1,4 +1,4 @@
-"""Base documentaire : upload PDF (indexation Pinecone), liste, suppression, recherche.
+"""Base documentaire : upload PDF (indexation pgvector), liste, suppression, recherche.
 
 Accepte tout document d'entreprise : normes BPF/GMP, procédures qualité, manuels
 machines, fiches techniques… Le PDF source est conservé pour la consultation
@@ -50,7 +50,7 @@ async def uploader(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> DocumentRag:
-    """Téléverse un PDF, l'indexe dans Pinecone (chunks + page), et l'enregistre."""
+    """Téléverse un PDF, l'indexe dans pgvector (chunks + page), et l'enregistre."""
     if not (file.filename or "").lower().endswith(".pdf"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Seuls les fichiers PDF sont acceptés.")
     contenu = await file.read()
