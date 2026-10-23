@@ -169,8 +169,13 @@ def _derniere_date_lecture() -> date:
     le dernier jour peut être partiel, sans aucune sortie (dimanche, import en
     cours de journée) : on part de MAX(Date) (lu sur l'index Date) et on recule
     jusqu'au jour le plus récent ayant une sortie. Repli : MAX(Date).
+    Les dates postérieures à aujourd'hui sont des erreurs de saisie (ex. 2040-03-30
+    dans DIVA) : elles sont ignorées pour ne pas déplacer « aujourd'hui » dans le futur.
     """
-    lignes = requete("SELECT MAX(Date) AS d FROM lectures")
+    lignes = requete(
+        "SELECT MAX(Date) AS d FROM lectures WHERE Date <= :aujourdhui",
+        aujourdhui=date.today().isoformat(),
+    )
     if not lignes or lignes[0]["d"] is None:
         raise DivatexIndisponible("Aucune lecture dans la base DIVA.")
     fin = _en_date(lignes[0]["d"])

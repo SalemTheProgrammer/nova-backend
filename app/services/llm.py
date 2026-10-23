@@ -22,11 +22,11 @@ def get_chat_model() -> ChatOpenAI:
         "timeout": 60,
         "max_retries": 2,
     }
-    # Les modèles de raisonnement gpt-5.x refusent les function tools sur
+    # Les modèles de raisonnement gpt-5.x / gpt-6.x refusent les function tools sur
     # /v1/chat/completions sans reasoning_effort="none" (erreur 400). On force
     # donc l'exécution directe, sans réflexion étendue : c'est ce qu'on veut pour
     # un agent d'atelier rapide qui enchaîne des appels d'outils.
-    if modele.startswith("gpt-5"):
+    if modele.startswith(("gpt-5", "gpt-6")):
         options["reasoning_effort"] = "none"
     return ChatOpenAI(**options)
 
