@@ -7,7 +7,6 @@ import pytest
 
 # Ensure config loads without a real .env during tests.
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
-os.environ.setdefault("PINECONE_API_KEY", "test-key")
 os.environ.setdefault("API_KEYS", "test-api-key")
 
 from fastapi.testclient import TestClient  # noqa: E402

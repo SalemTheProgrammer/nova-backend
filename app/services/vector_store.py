@@ -1,11 +1,11 @@
-"""Pinecone vector store service for RAG."""
+"""PostgreSQL + pgvector vector store service for RAG."""
 from __future__ import annotations
 
-from functools import lru_cache
+import json
+import uuid
 
+import psycopg
 from langchain_core.documents import Document
-from langchain_pinecone import PineconeVectorStore
-from pinecone import Pinecone, ServerlessSpec
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from app.core.config import get_settings
@@ -19,39 +19,40 @@ logger = get_logger(__name__)
 DOCUMENTS_NAMESPACE = "documents"
 
 
-@lru_cache
-def _get_pinecone_client() -> Pinecone:
+def _connect() -> psycopg.Connection:
     settings = get_settings()
-    if not settings.pinecone_api_key:
-        raise ConfigurationError("PINECONE_API_KEY is not configured")
-    return Pinecone(api_key=settings.pinecone_api_key)
+    if not settings.vector_database_url:
+        raise ConfigurationError("VECTOR_DATABASE_URL is not configured")
+    return psycopg.connect(settings.vector_database_url)
+
+
+def _vector_literal(vector: list[float]) -> str:
+    return "[" + ",".join(f"{x:.8f}" for x in vector) + "]"
 
 
 def ensure_index_exists() -> None:
-    """Create the Pinecone index if it does not already exist. Idempotent."""
+    """Create the pgvector extension, table and index if missing. Idempotent."""
     settings = get_settings()
-    client = _get_pinecone_client()
-    existing = {idx["name"] for idx in client.list_indexes()}
-    if settings.pinecone_index_name in existing:
-        return
-    logger.info("creating_pinecone_index", index=settings.pinecone_index_name)
-    client.create_index(
-        name=settings.pinecone_index_name,
-        dimension=settings.pinecone_embedding_dimension,
-        metric="cosine",
-        spec=ServerlessSpec(cloud=settings.pinecone_cloud, region=settings.pinecone_region),
-    )
-
-
-@lru_cache
-def get_vector_store() -> PineconeVectorStore:
-    settings = get_settings()
-    _get_pinecone_client()  # validates configuration
-    return PineconeVectorStore(
-        index_name=settings.pinecone_index_name,
-        embedding=get_embeddings(),
-        pinecone_api_key=settings.pinecone_api_key,
-    )
+    table = settings.vector_table_name
+    dim = int(settings.vector_embedding_dimension)
+    with _connect() as conn:
+        conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        conn.execute(
+            f"""
+            CREATE TABLE IF NOT EXISTS {table} (
+                id text PRIMARY KEY,
+                namespace text NOT NULL,
+                content text NOT NULL,
+                metadata jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                embedding vector({dim}) NOT NULL
+            )
+            """
+        )
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {table}_namespace_idx ON {table} (namespace)")
+        conn.execute(
+            f"CREATE INDEX IF NOT EXISTS {table}_embedding_idx "
+            f"ON {table} USING hnsw (embedding vector_cosine_ops)"
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -61,7 +62,25 @@ def get_vector_store() -> PineconeVectorStore:
 def add_document_chunks(documents: list[Document]) -> list[str]:
     """Index document chunks in the dedicated 'documents' namespace."""
     try:
-        return get_vector_store().add_documents(documents, namespace=DOCUMENTS_NAMESPACE)
+        table = get_settings().vector_table_name
+        embeddings = get_embeddings().embed_documents([d.page_content for d in documents])
+        ids = [str(uuid.uuid4()) for _ in documents]
+        with _connect() as conn, conn.cursor() as cur:
+            cur.executemany(
+                f"INSERT INTO {table} (id, namespace, content, metadata, embedding) "
+                "VALUES (%s, %s, %s, %s::jsonb, %s::vector)",
+                [
+                    (
+                        doc_id,
+                        DOCUMENTS_NAMESPACE,
+                        doc.page_content,
+                        json.dumps(doc.metadata, default=str),
+                        _vector_literal(vec),
+                    )
+                    for doc_id, doc, vec in zip(ids, documents, embeddings, strict=True)
+                ],
+            )
+        return ids
     except Exception as exc:  # noqa: BLE001
         logger.error("add_document_chunks_failed", error=str(exc))
         raise VectorStoreError("Failed to index document") from exc
@@ -69,11 +88,21 @@ def add_document_chunks(documents: list[Document]) -> list[str]:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=8))
 def search_documents(query: str, *, top_k: int = 5) -> list[tuple[Document, float]]:
-    """Search the documents namespace, returning (document, score) pairs for citations."""
+    """Search the documents namespace, returning (document, score) pairs for citations.
+
+    The score is the cosine similarity (1 = identical), as returned by Pinecone before.
+    """
     try:
-        return get_vector_store().similarity_search_with_score(
-            query, k=top_k, namespace=DOCUMENTS_NAMESPACE
-        )
+        table = get_settings().vector_table_name
+        vec = _vector_literal(get_embeddings().embed_query(query))
+        with _connect() as conn:
+            rows = conn.execute(
+                f"SELECT content, metadata, 1 - (embedding <=> %s::vector) AS score "
+                f"FROM {table} WHERE namespace = %s "
+                f"ORDER BY embedding <=> %s::vector LIMIT %s",
+                (vec, DOCUMENTS_NAMESPACE, vec, top_k),
+            ).fetchall()
+        return [(Document(page_content=c, metadata=m or {}), float(s)) for c, m, s in rows]
     except Exception as exc:  # noqa: BLE001
         logger.error("search_documents_failed", error=str(exc))
         raise VectorStoreError("Document search failed") from exc
@@ -84,7 +113,12 @@ def delete_document_vectors(ids: list[str]) -> None:
     if not ids:
         return
     try:
-        get_vector_store().delete(ids=ids, namespace=DOCUMENTS_NAMESPACE)
+        table = get_settings().vector_table_name
+        with _connect() as conn:
+            conn.execute(
+                f"DELETE FROM {table} WHERE namespace = %s AND id = ANY(%s)",
+                (DOCUMENTS_NAMESPACE, ids),
+            )
     except Exception as exc:  # noqa: BLE001
         logger.error("delete_document_vectors_failed", error=str(exc))
         raise VectorStoreError("Failed to delete document vectors") from exc

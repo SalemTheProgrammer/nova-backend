@@ -39,7 +39,7 @@ def lister_documents_disponibles() -> str:
 
 
 def _as_int(valeur: object) -> int | None:
-    """Pinecone renvoie les nombres en float (ex. page=7.0) : normalise en int."""
+    """Le JSON des métadonnées peut renvoyer des nombres en float (ex. page=7.0) : normalise en int."""
     if isinstance(valeur, bool) or valeur is None:
         return None
     if isinstance(valeur, (int, float)):

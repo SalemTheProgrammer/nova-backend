@@ -109,12 +109,10 @@ class Settings(BaseSettings):
     # Base documentaire (RAG) — stockage des PDF sources pour consultation/citations
     documents_pdf_dir: str = "./data/documents"
 
-    # Pinecone
-    pinecone_api_key: str = ""
-    pinecone_index_name: str = "nova-index"
-    pinecone_cloud: str = "aws"
-    pinecone_region: str = "us-east-1"
-    pinecone_embedding_dimension: int = 1536
+    # PostgreSQL + pgvector (RAG documentaire)
+    vector_database_url: str = ""
+    vector_table_name: str = "document_chunks"
+    vector_embedding_dimension: int = 1536
 
     # Agent
     agent_recursion_limit: int = 25
