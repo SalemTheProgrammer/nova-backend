@@ -17,6 +17,26 @@ from app.core.logging import get_logger
 logger = get_logger(__name__)
 
 
+def texte_du_message(content: Any) -> str:
+    """Texte lisible d'un contenu de message LangChain.
+
+    Les modèles récents (gpt-5.x / gpt-6.x) renvoient une LISTE de blocs
+    (``[{"type": "text", "text": "…", "annotations": [], …}]``) au lieu d'une
+    chaîne : un ``str(content)`` envoyait ce format brut tel quel sur WhatsApp.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        morceaux = []
+        for bloc in content:
+            if isinstance(bloc, str):
+                morceaux.append(bloc)
+            elif isinstance(bloc, dict) and bloc.get("type") == "text":
+                morceaux.append(str(bloc.get("text") or ""))
+        return "".join(morceaux)
+    return str(content or "")
+
+
 def _build_config(thread_id: str, outils_autorises: list[str] | None) -> dict:
     """Config d'exécution du graphe : thread, invocation, et périmètre d'outils.
 
@@ -62,8 +82,8 @@ async def run_agent(
 
     messages = result["messages"]
     for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and msg.content:
-            return msg.content if isinstance(msg.content, str) else str(msg.content)
+        if isinstance(msg, AIMessage) and texte_du_message(msg.content):
+            return texte_du_message(msg.content)
     raise AgentError("Agent produced no response")
 
 
@@ -105,9 +125,8 @@ async def run_agent_avec_artifacts(
     ]
 
     for msg in reversed(messages):
-        if isinstance(msg, AIMessage) and msg.content:
-            texte = msg.content if isinstance(msg.content, str) else str(msg.content)
-            return texte, artifacts
+        if isinstance(msg, AIMessage) and texte_du_message(msg.content):
+            return texte_du_message(msg.content), artifacts
     raise AgentError("Agent produced no response")
 
 
@@ -154,14 +173,14 @@ def _messages_to_turns(messages: list) -> list[dict]:
     assistant_turn: dict | None = None
     for i, msg in enumerate(messages):
         if isinstance(msg, HumanMessage):
-            content = msg.content if isinstance(msg.content, str) else str(msg.content)
+            content = texte_du_message(msg.content)
             turns.append(
                 {"id": f"h-{i}", "role": "user", "segments": [{"type": "text", "content": content}]}
             )
             assistant_turn = {"id": f"a-{i}", "role": "assistant", "segments": []}
             turns.append(assistant_turn)
         elif isinstance(msg, AIMessage):
-            text = msg.content if isinstance(msg.content, str) else ""
+            text = texte_du_message(msg.content)
             if not text:
                 continue
             if assistant_turn is None:
