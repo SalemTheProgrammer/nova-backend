@@ -33,7 +33,7 @@ from app.core.security import require_admin, require_api_key
 from app.db.session import session_scope
 from app.models.utilisateur import Utilisateur
 from app.schemas.tunicotex import ParametresRapportSchema
-from app.services import auth_service, chart_image_service, tunicotex_pdf
+from app.services import auth_service, chart_image_service, conversation_service, tunicotex_pdf
 from app.services.notify_service import WHATSAPP_MAX_CHARS, normaliser_numero
 
 router = APIRouter(prefix="/whatsapp", tags=["whatsapp"], dependencies=[Depends(require_api_key)])
@@ -374,6 +374,7 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
     # procédure » → envoyer_document vers ce numéro). Le prompt lui interdit de l'afficher.
     qui = f"{payload.push_name} {e164}" if payload.push_name else e164
     message = f"[WhatsApp — {qui}] {message}"
+    await asyncio.to_thread(_enregistrer_conversation, e164, message)
     # Un thread par numéro : mémoire multi-tours et confirmations comme sur le web.
     reponse, artifacts = await run_agent_avec_artifacts(
         message, thread_id=f"wa:{e164}", mode="whatsapp", outils_autorises=outils_autorises
@@ -381,6 +382,25 @@ async def whatsapp_inbound(payload: WhatsAppInbound) -> WhatsAppReply:
     images = await asyncio.to_thread(_rendre_artifacts_en_images, artifacts, e164)
     documents = await asyncio.to_thread(_rendre_documents, artifacts, e164)
     return await _reponse(reponse, entree_vocale, e164, images, documents)
+
+
+def _enregistrer_conversation(e164: str, message: str) -> None:
+    """Rattache le thread WhatsApp au compte de ce numéro (page admin « Conversations »)."""
+    try:
+        with session_scope() as db:
+            compte = db.execute(
+                select(Utilisateur).where(Utilisateur.telephone == e164)
+            ).scalar_one_or_none()
+            utilisateur_id = compte.id if compte else None
+    except Exception:  # noqa: BLE001
+        utilisateur_id = None
+    conversation_service.enregistrer(
+        f"wa:{e164}",
+        conversation_service.CANAL_WHATSAPP,
+        utilisateur_id=utilisateur_id,
+        numero=e164,
+        message=message,
+    )
 
 
 def _rendre_artifacts_en_images(artifacts: list[dict], e164: str) -> list[WhatsAppImage]:

@@ -6,7 +6,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 import orjson
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 
 from app.agent.runner import (
@@ -27,7 +27,7 @@ from app.schemas.chat import (
     ChatRequest,
     ChatResponse,
 )
-from app.services import ai_agent_service, auth_service
+from app.services import ai_agent_service, auth_service, conversation_service
 
 router = APIRouter(tags=["agent"])
 
@@ -49,10 +49,29 @@ def _outils_web(user: Utilisateur) -> list[str]:
     return [t for t in autorises if t in _READONLY]
 
 
+async def _enregistrer_web(thread_id: str, user: Utilisateur, message: str | None = None) -> None:
+    """Rattache le thread web à son auteur (page admin « Conversations »)."""
+    await asyncio.to_thread(
+        conversation_service.enregistrer,
+        thread_id,
+        conversation_service.CANAL_WEB,
+        utilisateur_id=user.id,
+        message=message,
+    )
+
+
+async def _exiger_acces(thread_id: str, user: Utilisateur) -> None:
+    """L'historique d'un thread est réservé à son auteur (et aux administrateurs) :
+    connaître l'identifiant d'un thread ne suffit pas pour le lire ou l'effacer."""
+    if not await asyncio.to_thread(conversation_service.peut_lire, user, thread_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Conversation introuvable.")
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest, user: Utilisateur = Depends(get_current_user)
 ) -> ChatResponse:
+    await _enregistrer_web(payload.thread_id, user, payload.message)
     response = await run_agent(
         payload.message,
         thread_id=payload.thread_id,
@@ -68,6 +87,7 @@ async def chat_history(
 ) -> ChatHistoryResponse:
     """Historique des tours d'un thread, pour réhydrater le panneau de chat
     après un refresh de page (voir `useAgentChat.ts`)."""
+    await _exiger_acces(thread_id, user)
     turns = await get_thread_history(thread_id)
     return ChatHistoryResponse(thread_id=thread_id, turns=turns)
 
@@ -76,6 +96,7 @@ async def chat_history(
 async def chat_clear(thread_id: str, user: Utilisateur = Depends(get_current_user)) -> None:
     """Efface définitivement l'historique d'un thread (bouton « effacer la
     conversation » du panneau de chat)."""
+    await _exiger_acces(thread_id, user)
     await delete_thread(thread_id)
 
 
@@ -103,6 +124,7 @@ async def chat_accueil(
     else:
         messages = list(ACCUEIL_NEUTRE)
     await enregistrer_accueil(thread_id, messages)
+    await _enregistrer_web(thread_id, user)
     return ChatAccueilResponse(thread_id=thread_id, messages=messages)
 
 
@@ -116,6 +138,7 @@ async def chat_stream(
 ) -> StreamingResponse:
     """Stream the agent run as Server-Sent Events (tokens + tool steps + artifacts)."""
     outils_autorises = _outils_web(user)
+    await _enregistrer_web(payload.thread_id, user, payload.message)
 
     async def generate() -> AsyncIterator[str]:
         async for event in stream_agent(
